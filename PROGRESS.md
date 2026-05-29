@@ -74,3 +74,36 @@ Tracks build state phase by phase. See `MASTER_PLAN.md` for the plan, `CLAUDE.md
 - Real `.env` must exist on the VPS (it does) with the Voyage key for the ingestion container.
 
 ---
+
+## Phase 2: Hybrid Retrieval Library — ✅ COMPLETE (2026-05-29)
+
+**Outcome:** `shared/retrieval.py` exposes one engine — `async retrieve(query, product, mode, top_k)` — with three modes, used by all MCP servers and measured by the eval scorecard.
+
+**Steps:**
+- 1 — `retrieve()` scaffold + signature; `product` is a plain string (no hardcoded list).
+- 2 — `vector_only`: embed query → Qdrant search → top_k; `latency_ms` stamped (added `latency_ms`/`rerank_latency_ms` to `SearchResult`).
+- 3 — `hybrid`: vector + BM25 in parallel (`asyncio.gather`/`to_thread`), fused with RRF (k=60).
+- 4 — `hybrid_rerank`: 30 hybrid candidates → Voyage `rerank-2` → top_k; surfaces rerank latency separately.
+- 5 — CLI debugging tool: `python -m shared.retrieval --query .. --product .. --mode .. --top-k ..`.
+- 6 — verified on the VPS via the ingestion container across 5 queries × 3 modes.
+
+**Definition of done — met:**
+- Modes return sensibly different results across 5 queries.
+- **p95 hybrid_rerank latency 323 ms** (target < 2000 ms).
+- No hardcoded product list.
+
+**Verification highlights:**
+- "how do I reverse a journal entry" (erp): pure-vector returned clean reversal hits; `hybrid` (RRF) mixed in a less-precise clearing-account chunk; `hybrid_rerank` restored precision (Journal Reversals 0.83). Crisp `vector → hybrid → hybrid+rerank` story for the scorecard.
+- Federation-ready: EPM (consolidation) and OCI (object storage, BYOIP) queries all retrieve correctly.
+
+**Decisions / fixes (with reasoning):**
+- `SearchResult` extended with optional `latency_ms` + `rerank_latency_ms` (the planned `-> list[SearchResult]` return type had no timing fields).
+- `db._fts_query` ORs terms instead of AND — strict AND made the BM25 leg return nothing for natural-language queries (hybrid collapsed to vector-only). OR restores recall; RRF + rerank handle precision.
+- `db.connect(check_same_thread=False)` — BM25 runs in an `asyncio.to_thread` worker.
+- RRF `k=60`; rerank candidate pool = 30; reranker = Voyage `rerank-2`.
+
+**Deferred / notes:**
+- The Phase 7 eval set should include a **stronger BM25-favoring query** (exact identifier / shape name / error code). The BYOIP query found the right page in all three modes, so it doesn't isolate BM25's unique value.
+- **Operational:** the ingestion image must be rebuilt (`docker compose run --rm --build ingestion`) whenever `shared/` changes, or container-side runs use a stale copy.
+
+---
