@@ -8,3 +8,4 @@ lxml==6.1.1
 tiktoken==0.13.0
 voyageai==0.3.7
 httpx==0.28.1
+qdrant-client==1.18.0
