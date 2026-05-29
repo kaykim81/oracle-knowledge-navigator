@@ -1,4 +1,7 @@
 .env
+.venv/
+__pycache__/
+*.pyc
 data/
 evals/results/
 ingestion/sources/*

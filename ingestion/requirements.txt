@@ -1,0 +1,5 @@
+# Ingestion container dependencies (Phase 1).
+# Also the working set for the dev-container venv used to run shared/ smoke tests.
+# Added incrementally as each Phase 1 step introduces a dependency.
+
+pydantic==2.13.4
