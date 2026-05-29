@@ -77,7 +77,9 @@ def connect(db_path: Path | str = DB_PATH) -> sqlite3.Connection:
     """Open a connection, creating the parent directory for file-based DBs."""
     if db_path != ":memory:":
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    # check_same_thread=False: retrieval runs BM25 in an asyncio.to_thread worker.
+    # Safe here — retrieval only reads; writes (ingestion) are single-threaded.
+    conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -115,9 +117,14 @@ def _row_to_chunk(row: sqlite3.Row) -> Chunk:
 
 
 def _fts_query(query: str) -> str:
-    """Build a safe FTS5 MATCH string: each word quoted, implicitly AND-ed."""
+    """Build a safe FTS5 MATCH string: each word quoted, OR-ed together.
+
+    OR (not implicit AND) so natural-language queries with extra words like
+    "how to ..." still retrieve documents matching any term — recall matters for
+    the BM25 leg of hybrid retrieval; BM25 ranking + RRF + rerank handle precision.
+    """
     tokens = re.findall(r"\w+", query)
-    return " ".join(f'"{t}"' for t in tokens)
+    return " OR ".join(f'"{t}"' for t in tokens)
 
 
 def search_bm25(

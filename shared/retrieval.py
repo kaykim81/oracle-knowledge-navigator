@@ -23,14 +23,18 @@ import asyncio
 import logging
 import time
 
-from . import embeddings, qdrant_store
+from . import db, embeddings, qdrant_store
 from .models import RetrievalMode, SearchResult
 
 log = logging.getLogger(__name__)
 
-# Lazily-built, reusable Qdrant client (MCP servers call retrieve() repeatedly).
-# Tests inject an in-memory client via set_qdrant_client().
+# Reciprocal Rank Fusion constant (standard value).
+RRF_K = 60
+
+# Lazily-built, reusable clients (MCP servers call retrieve() repeatedly).
+# Tests inject in-memory instances via set_qdrant_client() / set_db_connection().
 _qdrant = None
+_db = None
 
 
 def _get_qdrant():
@@ -44,6 +48,31 @@ def set_qdrant_client(client) -> None:
     """Override the module's Qdrant client (used by tests / explicit config)."""
     global _qdrant
     _qdrant = client
+
+
+def _get_db():
+    global _db
+    if _db is None:
+        _db = db.connect()
+    return _db
+
+
+def set_db_connection(conn) -> None:
+    """Override the module's SQLite connection (used by tests / explicit config)."""
+    global _db
+    _db = conn
+
+
+def _rrf_fuse(ranked_lists, top_k):
+    """Reciprocal Rank Fusion: score(d) = sum_rankers 1 / (RRF_K + rank)."""
+    scores: dict[str, float] = {}
+    chunks: dict[str, object] = {}
+    for hits in ranked_lists:
+        for rank, (chunk, _score) in enumerate(hits, start=1):
+            scores[chunk.id] = scores.get(chunk.id, 0.0) + 1.0 / (RRF_K + rank)
+            chunks[chunk.id] = chunk
+    ordered = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:top_k]
+    return [(chunks[cid], score) for cid, score in ordered]
 
 
 async def retrieve(
@@ -78,7 +107,29 @@ async def _vector_only(query: str, product: str, top_k: int) -> list[SearchResul
 
 
 async def _hybrid(query: str, product: str, top_k: int) -> list[SearchResult]:
-    raise NotImplementedError("hybrid: implemented in Phase 2 step 3")
+    """Run vector + BM25 in parallel, fuse with RRF, return top_k."""
+    t0 = time.perf_counter()
+    pool = max(top_k, 30)  # candidate depth fetched from each ranker before fusion
+
+    async def vector_leg():
+        vector = await asyncio.to_thread(embeddings.embed_query, query)
+        return await asyncio.to_thread(
+            qdrant_store.search, _get_qdrant(), product, vector, limit=pool
+        )
+
+    async def bm25_leg():
+        return await asyncio.to_thread(
+            db.search_bm25, _get_db(), query, product=product, limit=pool
+        )
+
+    vector_hits, bm25_hits = await asyncio.gather(vector_leg(), bm25_leg())
+    fused = _rrf_fuse([vector_hits, bm25_hits], top_k)
+    latency_ms = round((time.perf_counter() - t0) * 1000, 1)
+    return [
+        SearchResult(chunk=chunk, score=score, retrieval_mode="hybrid",
+                     latency_ms=latency_ms)
+        for chunk, score in fused
+    ]
 
 
 async def _hybrid_rerank(query: str, product: str, top_k: int) -> list[SearchResult]:
