@@ -73,13 +73,20 @@ ON CONFLICT(id) DO UPDATE SET
 """
 
 
-def connect(db_path: Path | str = DB_PATH) -> sqlite3.Connection:
-    """Open a connection, creating the parent directory for file-based DBs."""
-    if db_path != ":memory:":
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+def connect(db_path: Path | str = DB_PATH, *, read_only: bool = False) -> sqlite3.Connection:
+    """Open a connection, creating the parent directory for file-based DBs.
+
+    ``read_only=True`` opens in SQLite read-only mode — required when the DB
+    file is on a read-only bind mount (the MCP servers mount chunks.db ``:ro``).
+    """
     # check_same_thread=False: retrieval runs BM25 in an asyncio.to_thread worker.
     # Safe here — retrieval only reads; writes (ingestion) are single-threaded.
-    conn = sqlite3.connect(db_path, check_same_thread=False)
+    if read_only and db_path != ":memory:":
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, check_same_thread=False)
+    else:
+        if db_path != ":memory:":
+            Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 

@@ -12,6 +12,8 @@ from __future__ import annotations
 import logging
 
 from mcp.server.fastmcp import FastMCP
+from starlette.requests import Request
+from starlette.responses import PlainTextResponse
 
 from shared import db, retrieval
 
@@ -32,9 +34,15 @@ _conn = None
 def _db():
     global _conn
     if _conn is None:
-        _conn = db.connect()
+        _conn = db.connect(read_only=True)  # SQLite is bind-mounted read-only
         retrieval.set_db_connection(_conn)
     return _conn
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health(_request: Request) -> PlainTextResponse:
+    """Liveness probe for the container healthcheck."""
+    return PlainTextResponse("ok")
 
 
 @mcp.tool()
