@@ -98,13 +98,20 @@ class Chunk(BaseModel):
 
 
 class SearchResult(BaseModel):
-    """A retrieved chunk with its score and the mode that produced it."""
+    """A retrieved chunk with its score and the mode that produced it.
+
+    ``latency_ms`` is the total retrieval latency for the query that produced
+    this result (stamped on each result for the UI trace). ``rerank_latency_ms``
+    is the rerank step's latency, set only in ``hybrid_rerank`` mode.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     chunk: Chunk
     score: float
     retrieval_mode: RetrievalMode
+    latency_ms: float | None = None
+    rerank_latency_ms: float | None = None
 
 
 # --------------------------------------------------------------------------- #

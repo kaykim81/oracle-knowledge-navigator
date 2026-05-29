@@ -19,11 +19,31 @@ Smoke test (step 5)::
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 
+from . import embeddings, qdrant_store
 from .models import RetrievalMode, SearchResult
 
 log = logging.getLogger(__name__)
+
+# Lazily-built, reusable Qdrant client (MCP servers call retrieve() repeatedly).
+# Tests inject an in-memory client via set_qdrant_client().
+_qdrant = None
+
+
+def _get_qdrant():
+    global _qdrant
+    if _qdrant is None:
+        _qdrant = qdrant_store.get_client()
+    return _qdrant
+
+
+def set_qdrant_client(client) -> None:
+    """Override the module's Qdrant client (used by tests / explicit config)."""
+    global _qdrant
+    _qdrant = client
 
 
 async def retrieve(
@@ -43,7 +63,18 @@ async def retrieve(
 
 
 async def _vector_only(query: str, product: str, top_k: int) -> list[SearchResult]:
-    raise NotImplementedError("vector_only: implemented in Phase 2 step 2")
+    """Embed the query, search the product's Qdrant collection, return top_k."""
+    t0 = time.perf_counter()
+    vector = await asyncio.to_thread(embeddings.embed_query, query)
+    hits = await asyncio.to_thread(
+        qdrant_store.search, _get_qdrant(), product, vector, limit=top_k
+    )
+    latency_ms = round((time.perf_counter() - t0) * 1000, 1)
+    return [
+        SearchResult(chunk=chunk, score=score, retrieval_mode="vector_only",
+                     latency_ms=latency_ms)
+        for chunk, score in hits
+    ]
 
 
 async def _hybrid(query: str, product: str, top_k: int) -> list[SearchResult]:
