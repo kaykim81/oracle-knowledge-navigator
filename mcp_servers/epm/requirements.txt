@@ -1,0 +1,5 @@
+# EPM MCP server runtime deps (same as the other MCP servers).
+mcp==1.27.2
+pydantic==2.13.4
+voyageai==0.3.7
+qdrant-client==1.15.1

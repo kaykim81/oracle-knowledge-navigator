@@ -38,6 +38,38 @@ services:
     depends_on:
       - qdrant
 
+  # OCI MCP server — Oracle Cloud Infrastructure knowledge. Internal only.
+  oci-mcp:
+    build:
+      context: .
+      dockerfile: mcp_servers/oci/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      QDRANT_HOST: qdrant
+    volumes:
+      - ./data/sqlite:/app/data/sqlite:ro
+    networks:
+      - navigator-internal
+    depends_on:
+      - qdrant
+
+  # EPM MCP server — Oracle Fusion Cloud EPM knowledge. Internal only.
+  epm-mcp:
+    build:
+      context: .
+      dockerfile: mcp_servers/epm/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      QDRANT_HOST: qdrant
+    volumes:
+      - ./data/sqlite:/app/data/sqlite:ro
+    networks:
+      - navigator-internal
+    depends_on:
+      - qdrant
+
   # On-demand ingestion tool. Not started by `docker compose up` (profiles).
   # Run with: docker compose run --rm ingestion
   ingestion:
