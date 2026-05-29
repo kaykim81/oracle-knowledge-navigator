@@ -23,7 +23,7 @@ import re
 import sqlite3
 from pathlib import Path
 
-from .models import Chunk, Product
+from .models import Chunk, Document, Product
 
 # data/sqlite/chunks.db under the project root; bind-mounted into containers.
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "sqlite" / "chunks.db"
@@ -161,6 +161,46 @@ def count_by_product(conn: sqlite3.Connection) -> dict[str, int]:
     return {row["product"]: row["n"] for row in rows}
 
 
+def chunks_for_doc(conn: sqlite3.Connection, doc_id: str) -> list[Chunk]:
+    """All chunks of a document, in order."""
+    rows = conn.execute(
+        "SELECT * FROM chunks WHERE doc_id = ? ORDER BY chunk_index", (doc_id,)
+    ).fetchall()
+    return [_row_to_chunk(row) for row in rows]
+
+
+def get_document(conn: sqlite3.Connection, doc_id: str) -> Document | None:
+    """Reconstruct a full Document from its stored chunks (None if unknown).
+
+    We don't store whole documents — just chunks — so the full text is the
+    chunks re-joined in order, and the title is the document's top-level heading.
+    """
+    chunks = chunks_for_doc(conn, doc_id)
+    if not chunks:
+        return None
+    title = chunks[0].section_path[0] if chunks[0].section_path else doc_id
+    return Document(
+        id=doc_id,
+        product=chunks[0].product,
+        title=title,
+        source_url=chunks[0].source_url,
+        full_text="\n\n".join(c.text for c in chunks),
+    )
+
+
+def top_level_sections(conn: sqlite3.Connection, product: Product) -> list[str]:
+    """Distinct top-level section names for a product (drives list_topics)."""
+    rows = conn.execute(
+        "SELECT DISTINCT section_path FROM chunks WHERE product = ?", (product,)
+    )
+    tops: set[str] = set()
+    for row in rows:
+        path = json.loads(row["section_path"])
+        if path:
+            tops.add(path[0])
+    return sorted(tops)
+
+
 # --------------------------------------------------------------------------- #
 # CLI smoke test (in-memory)
 # --------------------------------------------------------------------------- #
@@ -214,6 +254,14 @@ def _smoke_test() -> None:
     assert not search_bm25(conn, "journal entry"), "old text still indexed after update"
     assert search_bm25(conn, "depreciation"), "new text not indexed after update"
     print("OK: idempotent upsert; FTS re-synced on text update")
+
+    # get_document reconstructs full text from chunks; top_level_sections lists topics
+    doc = get_document(conn, "erp-gl")
+    assert doc and doc.product == "erp"
+    assert "Depreciation" in doc.full_text and "supplier" in doc.full_text.lower()
+    assert get_document(conn, "does-not-exist") is None
+    assert "Assets" in top_level_sections(conn, "erp")
+    print("OK: get_document + top_level_sections")
 
     conn.close()
     print("\nALL DB SMOKE TESTS PASSED")
