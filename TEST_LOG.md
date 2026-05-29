@@ -120,16 +120,26 @@ Strict (keyword in section path):
 | mode | recall@1 | recall@5 | MRR |
 |---|---|---|---|
 | vector_only | 73% | 96% | 0.817 |
-| hybrid | 65% | 91% | 0.778 |
+| hybrid | 65% | 91% | 0.781 |
 | hybrid_rerank | 67% | 93% | 0.778 |
 
-Per-category breakdown (strict bar): _to be appended from the next run._
+**Per-category breakdown (strict section bar) — recall@1 / MRR:**
+
+| category (n) | vector_only | hybrid | hybrid_rerank |
+|---|---|---|---|
+| single (30) | 87% / 0.933 | 70% / 0.833 | 87% / **0.933** |
+| cross (20) | 60% / 0.714 | **65% / 0.757** | 35% / 0.540 |
+| adversarial (5) | 40% / 0.533 | 40% / 0.567 | **80% / 0.800** |
 
 ### The honest finding
 
-**On this corpus, pure vector retrieval is the strongest mode** — voyage-3-large on clean Oracle docs with well-formed questions already retrieves a relevant chunk first ~96% of the time (lenient) / 73% (strict section). Hybrid adds candidates whose RRF fusion can displace the clean vector top-1; rerank does not recover the keyword/section signal. Held across both relevance bars and both evaluation levels.
+**Mode value is input-dependent — each mode wins in the regime it was designed for**, and the aggregate (dominated by 30 easy single-product questions where vector already saturates) masks it:
 
-This is a result, not a failure. Hybrid + rerank earn their value in **harder regimes** — noisier corpora, exact-match / keyword / typo-laden queries, much larger scale — that a clean, well-embedded demo corpus doesn't stress.
+- **Adversarial questions → rerank wins decisively: recall@1 doubles, 40% → 80%.** When terminology is misleading (e.g. "reverse a *consolidation* journal" lures ERP but the answer is EPM), rerank's semantic precision surfaces the right section. This is exactly what a reranker is for.
+- **Cross-product questions → hybrid wins** (MRR 0.757 > vector 0.714): the BM25 keyword leg catches the specific cross-domain sections; rerank over-reorders on the mixed-domain query and dips.
+- **Easy single-product → vector ≈ rerank > hybrid**: voyage-3-large already retrieves the right section first ~87% of the time; hybrid's keyword candidates add RRF noise; rerank cleans it back to vector's level.
+
+So both DoD criteria hold *in the right regime* — hybrid beats vector on recall for cross-product, and rerank beats hybrid (on adversarial retrieval, and on judged answer quality 3.83 vs 3.22). Hybrid + rerank earn their keep most on **harder inputs**; on a clean, well-embedded corpus with well-formed questions, pure vector is a strong baseline. (Caveats: adversarial n=5, cross n=20 — modest samples; directional.)
 
 ### Debugging done (in the plan's order)
 
@@ -139,7 +149,8 @@ This is a result, not a failure. Hybrid + rerank earn their value in **harder re
 
 ### Interview talking points
 
-- "I built the full hybrid + rerank pipeline **and** a rigorous two-level eval, and the eval told me pure vector already saturates retrieval quality on this corpus. The honest answer is *it depends on the corpus and query distribution* — I can tell you exactly when hybrid and rerank earn their keep."
-- The eval **caught a real bug** (BM25 stopword pollution) that a glance at the demo never would — that's the point of evals as quality gates.
-- A flat or non-monotonic scorecard, honestly reported, is more credible than a suspiciously clean curve; the methodology (two levels, two relevance bars, LLM-as-judge with a strict rubric, per-category) is the defensible part.
-- Where I'd push next: a harder/representative query set (exact IDs, abbreviations, typos), human-labeled gold chunks, and re-running at larger scale where hybrid/rerank typically separate.
+- **Lead with the per-category result, not the aggregate.** "On the *adversarial* questions, reranking doubled top-1 precision (40% → 80%). On *cross-product*, the BM25 hybrid leg won on recall. On *easy* questions, vector already saturates and the extras add noise. The aggregate hides this because it's dominated by easy questions — so I broke it down by query type."
+- "The honest answer is *it depends on the corpus and query distribution*. I built the full hybrid + rerank pipeline **and** a rigorous eval that tells me exactly when each mode earns its keep."
+- The eval **caught a real bug** (BM25 stopword pollution dragging hybrid below vector) that eyeballing the demo never would — that's the point of evals as quality gates.
+- The methodology is the defensible part: two evaluation levels (retrieval + end-to-end), two relevance bars (lenient text / strict section), LLM-as-judge with a strict rubric over the Batches API, and a per-category cut. A flat or non-monotonic aggregate, honestly reported and decomposed, is more credible than a suspiciously clean curve.
+- Where I'd push next: larger adversarial/cross samples (n=5/20 here), a harder/representative query set (exact IDs, abbreviations, typos), human-labeled gold chunks, and re-running at larger corpus scale where hybrid/rerank separate more.

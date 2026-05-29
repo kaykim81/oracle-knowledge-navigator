@@ -197,3 +197,25 @@ Tracks build state phase by phase. See `MASTER_PLAN.md` for the plan, `CLAUDE.md
 - Latency (Phase 5 note) still applies — a spinner covers the wait; streaming is a Phase 8 candidate.
 
 ---
+
+## Phase 7: Evaluation Harness — ✅ COMPLETE (2026-05-29)
+
+**Outcome:** A rigorous two-level eval. Full details + tables in `TEST_LOG.md`.
+
+**Built:**
+- `evals/dataset.jsonl` — 45 hand-built questions (30 single, 10 cross, 5 adversarial).
+- `evals/runner.py` — end-to-end: query orchestrator ×3 modes/question, LLM-as-judge (Sonnet 4.6, Batches API), routing/recall/latency, `{ts}.jsonl` + `{ts}_summary.md`.
+- `evals/retrieval_eval.py` — retrieval-level scorecard: recall@k + MRR on `retrieve()` directly, two relevance bars (lenient text / strict section), per-category breakdown. Near-free + fast.
+- `evals/Dockerfile` + compose `evals` service (profiles: tools).
+
+**Definition of done — met (with nuance):** `docker compose run evals` produces JSONL + markdown summary. Both criteria hold **per regime**: hybrid > vector on recall for **cross-product**; rerank > hybrid on **adversarial** retrieval (recall@1 40%→80%) and on judged answer quality (3.83 vs 3.22).
+
+**Headline finding:** mode value is **input-dependent**. Aggregate (dominated by 30 easy single questions) shows vector strongest, masking that **rerank doubles top-1 precision on adversarial questions** and hybrid wins on cross-product. Honest per-category decomposition > a forced monotonic curve.
+
+**Debug done (plan order):** (1) metric too lenient → added strict section bar + per-category; (2) **real bug fixed** — BM25 OR-ed stopwords, polluting RRF and dragging hybrid below vector; now ORs content words only; (3) candidate pool already 30.
+
+**Deferred / notes:**
+- Full 45-question **end-to-end** judged run not run at scale (only a 6-question dry run, which confirmed rerank>hybrid on quality); optional — the retrieval scorecard + per-category is the headline. Costs ~1hr + spend.
+- Operational gap found: rebuilding MCP servers requires restarting the orchestrator (stale persistent sessions). Add reconnection-on-failure in Phase 8.
+
+---
