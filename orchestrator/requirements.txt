@@ -1,0 +1,6 @@
+# Orchestrator runtime deps. The orchestrator is an MCP *client* + Anthropic
+# SDK; it reaches the retrieval engine over the network (MCP), so it does not
+# import the shared library. FastAPI/uvicorn are added in Phase 5 step 4.
+
+anthropic==0.105.2
+mcp==1.27.2
