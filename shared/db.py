@@ -123,15 +123,27 @@ def _row_to_chunk(row: sqlite3.Row) -> Chunk:
     )
 
 
-def _fts_query(query: str) -> str:
-    """Build a safe FTS5 MATCH string: each word quoted, OR-ed together.
+# Common English words dropped from the BM25 query. OR-ing these in (a, in, how,
+# do, ...) makes the keyword leg match almost every chunk, polluting RRF fusion
+# and making hybrid underperform pure vector. Filtering them keeps OR's recall
+# benefit without the noise.
+_STOPWORDS = frozenset("""
+a an and are as at be by do does for from how i in into is it its my of on or
+that the their to was what when where which who why will with you your me we our
+""".split())
 
-    OR (not implicit AND) so natural-language queries with extra words like
-    "how to ..." still retrieve documents matching any term — recall matters for
-    the BM25 leg of hybrid retrieval; BM25 ranking + RRF + rerank handle precision.
+
+def _fts_query(query: str) -> str:
+    """Build a safe FTS5 MATCH string: content words quoted, OR-ed together.
+
+    Words are OR-ed (not implicit AND) so natural-language queries still retrieve
+    documents matching any meaningful term. Stopwords are dropped so the keyword
+    leg matches on content, not on "how"/"a"/"in"; if a query is all stopwords we
+    fall back to every token. BM25 ranking + RRF + rerank handle precision.
     """
-    tokens = re.findall(r"\w+", query)
-    return " OR ".join(f'"{t}"' for t in tokens)
+    tokens = re.findall(r"\w+", query.lower())
+    content = [t for t in tokens if t not in _STOPWORDS and len(t) > 1]
+    return " OR ".join(f'"{t}"' for t in (content or tokens))
 
 
 def search_bm25(
