@@ -150,3 +150,30 @@ Tracks build state phase by phase. See `MASTER_PLAN.md` for the plan, `CLAUDE.md
 **Definition of done — met:** live MCP client test on the VPS — each server's `search_docs` returned only its product's chunks (asserted `products == {product}`); all three `Up (healthy)`.
 
 ---
+
+## Phase 5: Orchestrator Agent — ✅ COMPLETE (2026-05-29)
+
+**Outcome:** `orchestrator/` runs a Claude Sonnet 4.6 agent loop (Anthropic SDK directly, no LangChain/LangGraph) that connects to all three MCP servers, namespaces their tools per product, routes queries, and returns `{answer, trace, latency_ms}`. Verified on the VPS.
+
+**Steps:**
+- 1–3 — `orchestrator/agent.py` + `prompts/system.md`: `OrchestratorAgent` connects to the 3 servers, namespaces tools (`erp_`/`oci_`/`epm_` × search_docs/get_document/list_topics = 9 tools), manual tool-use loop, structured trace. Server scope flows from each MCP server's `instructions` into the system prompt (DRY). Prompt caching on the system+tools prefix.
+- 4 — `orchestrator/server.py`: FastAPI `POST /query` ({question, retrieval_mode?} → {answer, trace, latency_ms}) + `/health`; lifespan opens/closes MCP sessions.
+- 5 — Dockerfile (uvicorn :8000) + compose `orchestrator` service (internal, ANTHROPIC_API_KEY via env_file, depends_on the 3 MCP servers `service_healthy`).
+- 6 — live test on the VPS.
+
+**Definition of done — met (5 representative questions, all routes correct):**
+- single ERP/OCI/EPM → routed to only that product (1 tool call each).
+- cross ERP↔EPM data-flow question → routed to **both** erp + epm (4 tool calls), answer synthesized from both.
+- out-of-scope (weather) → **0 tool calls**, graceful refusal.
+
+**Decisions:**
+- Manual tool-use loop (not the SDK tool-runner) — needed for the structured trace.
+- Adaptive thinking off by default (predictable latency + clean traces); one-line tunable.
+- Persistent MCP sessions via AsyncExitStack, managed by the FastAPI lifespan.
+- `retrieval_mode` override on `/query` so the Phase 7 eval runner can compare modes.
+
+**Deferred / notes:**
+- **Latency:** ~19–22s single-product, ~43s cross-product — driven by Claude generating long verbose answers across two sequential calls (retrieval itself is ~300ms). Address in Phase 8: stream answers in the UI and/or tighten answer length in the system prompt. Prompt caching is already in place.
+- Routing validated on 5 cases covering all paths; the plan suggests ≥10 — expand during polish if time allows.
+
+---
