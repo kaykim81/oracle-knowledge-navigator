@@ -1,0 +1,116 @@
+{
+  "_comment": "Source manifest for the ingestion pipeline (Phase 1, step 1). Drives ingestion/fetch_docs.py. ERP/EPM are fetched as whole-guide PDFs (Fusion SaaS HTML books are JS-rendered TOCs that a plain HTTP client cannot scrape). OCI is fetched by bounded HTML crawl (static .htm pages with clean heading structure). All URLs verified HTTP 200 on the generated date.",
+  "generated": "2026-05-29",
+  "embedding_model": "voyage-3-large",
+  "embedding_dim": 1024,
+  "products": {
+    "erp": {
+      "label": "Oracle Fusion Cloud ERP (Financials)",
+      "collection": "erp_docs",
+      "release": "25D",
+      "fetch_mode": "pdf",
+      "documents": [
+        {
+          "doc_id": "erp-general-ledger",
+          "title": "Using General Ledger",
+          "part_number": "G40913-01",
+          "format": "pdf",
+          "url": "https://docs.oracle.com/en/cloud/saas/financials/25d/faugl/using-general-ledger.pdf"
+        },
+        {
+          "doc_id": "erp-payables",
+          "title": "Using Payables Invoice to Pay",
+          "part_number": null,
+          "format": "pdf",
+          "url": "https://docs.oracle.com/en/cloud/saas/financials/25d/fappp/using-payables-invoice-to-pay.pdf"
+        },
+        {
+          "doc_id": "erp-receivables",
+          "title": "Using Receivables Credit to Cash",
+          "part_number": "G40917-02",
+          "format": "pdf",
+          "url": "https://docs.oracle.com/en/cloud/saas/financials/25d/faofc/using-receivables-credit-to-cash.pdf"
+        },
+        {
+          "doc_id": "erp-assets",
+          "title": "Using Assets",
+          "part_number": "G40907-02",
+          "format": "pdf",
+          "url": "https://docs.oracle.com/en/cloud/saas/financials/25d/faalm/using-assets.pdf"
+        }
+      ]
+    },
+    "epm": {
+      "label": "Oracle Fusion Cloud EPM",
+      "collection": "epm_docs",
+      "release": "mixed (see per-doc part numbers)",
+      "fetch_mode": "pdf",
+      "documents": [
+        {
+          "doc_id": "epm-planning",
+          "title": "Administering Planning Modules",
+          "part_number": "E94267-71",
+          "format": "pdf",
+          "url": "https://docs.oracle.com/en/cloud/saas/planning-budgeting-cloud/epbca/GUID-71622AFD-C1F0-4D40-A36F-85FA8AA305B6.pdf"
+        },
+        {
+          "doc_id": "epm-fcc",
+          "title": "Administering Financial Consolidation and Close",
+          "part_number": "E93973-89",
+          "format": "pdf",
+          "note": "Uses the 'latest' URL path; content drifts over time. Part number recorded for reference.",
+          "url": "https://docs.oracle.com/cloud/latest/financial-consol-cloud/AGFCC/AGFCC.pdf"
+        },
+        {
+          "doc_id": "epm-narrative-reporting",
+          "title": "Administering Narrative Reporting",
+          "part_number": "E94194-59",
+          "format": "pdf",
+          "url": "https://docs.oracle.com/en/cloud/saas/enterprise-performance-reporting-cloud/adepr/GUID-2F1628DC-4D7B-419B-8BD2-9EA9C18A7189.pdf"
+        }
+      ]
+    },
+    "oci": {
+      "label": "Oracle Cloud Infrastructure",
+      "collection": "oci_docs",
+      "fetch_mode": "crawl_html",
+      "crawl": {
+        "same_host_only": true,
+        "allowed_prefix": "https://docs.oracle.com/en-us/iaas/Content/",
+        "max_pages_per_service": 60,
+        "request_delay_seconds": 0.5,
+        "_comment": "fetch_docs.py crawls within each service's section_prefix, following only links under allowed_prefix, capped at max_pages_per_service to keep volume comparable to ERP/EPM (~240 OCI pages total) and avoid runaway crawls."
+      },
+      "services": [
+        {
+          "doc_id": "oci-compute",
+          "title": "Compute",
+          "format": "html",
+          "seed": "https://docs.oracle.com/en-us/iaas/Content/Compute/Concepts/computeoverview.htm",
+          "section_prefix": "https://docs.oracle.com/en-us/iaas/Content/Compute/"
+        },
+        {
+          "doc_id": "oci-networking",
+          "title": "Networking",
+          "format": "html",
+          "seed": "https://docs.oracle.com/en-us/iaas/Content/Network/Concepts/overview.htm",
+          "section_prefix": "https://docs.oracle.com/en-us/iaas/Content/Network/"
+        },
+        {
+          "doc_id": "oci-object-storage",
+          "title": "Object Storage",
+          "format": "html",
+          "seed": "https://docs.oracle.com/en-us/iaas/Content/Object/Concepts/objectstorageoverview.htm",
+          "section_prefix": "https://docs.oracle.com/en-us/iaas/Content/Object/"
+        },
+        {
+          "doc_id": "oci-iam",
+          "title": "IAM (Identity and Access Management)",
+          "format": "html",
+          "seed": "https://docs.oracle.com/en-us/iaas/Content/Identity/Concepts/overview.htm",
+          "section_prefix": "https://docs.oracle.com/en-us/iaas/Content/Identity/"
+        }
+      ]
+    }
+  }
+}
