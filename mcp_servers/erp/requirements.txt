@@ -1,0 +1,8 @@
+# ERP MCP server runtime deps.
+# Only what shared.retrieval's import chain needs at query time — no chunking/
+# PDF/HTML libs (those are ingestion-only).
+
+mcp==1.27.2
+pydantic==2.13.4
+voyageai==0.3.7
+qdrant-client==1.15.1
