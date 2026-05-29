@@ -177,3 +177,23 @@ Tracks build state phase by phase. See `MASTER_PLAN.md` for the plan, `CLAUDE.md
 - Routing validated on 5 cases covering all paths; the plan suggests ≥10 — expand during polish if time allows.
 
 ---
+
+## Phase 6: Streamlit Demo UI — ✅ COMPLETE (2026-05-29)
+
+**Outcome:** Live, public, working demo at **https://navigator.p36server.com**, gated by Traefik basic auth — the interview's "live URL" success criterion.
+
+**Steps:**
+- 1–2 — `ui/app.py`: question box, 4 sample buttons (ERP/OCI/EPM/cross), cited answer, expandable agent trace (server, top chunks with score/section/source/snippet, per-step latency), total-latency banner, "why federation" sidebar + repo/eval links.
+- (support) `orchestrator/agent.py`: trace enriched with structured top-chunk info so the UI can render chunks (Claude still receives full results).
+- 3 — `ui/Dockerfile`: Streamlit on :8501, `/_stcore/health` healthcheck.
+- 4 — compose `ui` service on `navigator-internal` + external `traefik_proxy`; Traefik labels (Host `${PUBLIC_HOSTNAME}`, websecure, `mytlschallenge` TLS, basic-auth from `${BASIC_AUTH_USER}:${BASIC_AUTH_PASSWORD_HASH}`, port 8501).
+- 5 — browsed the live URL.
+
+**Definition of done — met:** live URL serves the demo; basic-auth prompt gates it (demo/demo); cross-product sample renders an answer with a two-server (erp+epm) trace.
+
+**Notes:**
+- Streamlit websockets passed through Traefik on defaults — no `enableXsrfProtection=false` needed.
+- The single-`$` bcrypt hash in `.env` interpolated correctly into the Traefik basic-auth label (compose doesn't re-interpolate substituted values).
+- Latency (Phase 5 note) still applies — a spinner covers the wait; streaming is a Phase 8 candidate.
+
+---
