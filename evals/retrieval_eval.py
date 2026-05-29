@@ -40,6 +40,17 @@ DATASET = Path(__file__).parent / "dataset.jsonl"
 RESULTS_DIR = Path(__file__).parent / "results"
 
 
+CATEGORIES = ["single", "cross", "adversarial"]
+
+
+def _category(q: dict) -> str:
+    if q["id"].startswith("adv-"):
+        return "adversarial"
+    if len(q["expected_products"]) > 1:
+        return "cross"
+    return "single"
+
+
 def _first_match_rank(results, keywords: list[str], field: str) -> int | None:
     """1-based rank of the first result matching a keyword under the given bar.
 
@@ -63,7 +74,8 @@ async def evaluate() -> list[dict]:
         for product in q["expected_products"]:
             for mode in MODES:
                 results = await retrieval.retrieve(q["question"], product, mode, top_k=TOP_K)
-                row = {"question_id": q["id"], "product": product, "mode": mode}
+                row = {"question_id": q["id"], "category": _category(q),
+                       "product": product, "mode": mode}
                 for bar in BARS:
                     rank = _first_match_rank(results, q["expected_section_keywords"], bar)
                     row[f"rank_{bar}"] = rank
@@ -100,6 +112,11 @@ def main() -> None:
     rows = asyncio.run(evaluate())
     text_table = summarize(rows, "text")
     section_table = summarize(rows, "section")
+    per_category = "".join(
+        f"### {cat} ({len([r for r in rows if r['category']==cat]) // len(MODES)} questions, "
+        f"section bar)\n\n{summarize([r for r in rows if r['category']==cat], 'section')}\n\n"
+        for cat in CATEGORIES if any(r["category"] == cat for r in rows)
+    )
 
     (RESULTS_DIR / f"{ts}_retrieval.jsonl").write_text(
         "\n".join(json.dumps(r) for r in rows) + "\n"
@@ -109,11 +126,13 @@ def main() -> None:
         f"{len(rows)} (question, product, mode) evaluations across {len(MODES)} modes, "
         f"top_k={TOP_K}.\n\n"
         f"## Relevance bar: keyword anywhere in chunk (lenient)\n\n{text_table}\n\n"
-        f"## Relevance bar: keyword in section path (strict — right section)\n\n{section_table}\n"
+        f"## Relevance bar: keyword in section path (strict — right section)\n\n{section_table}\n\n"
+        f"## Per category (strict section bar)\n\n{per_category}"
     )
     print("\n## TEXT bar (lenient)\n" + text_table)
     print("\n## SECTION bar (strict)\n" + section_table)
-    print(f"\nwrote {ts}_retrieval.md")
+    print("\n## PER CATEGORY (section bar)\n" + per_category)
+    print(f"wrote {ts}_retrieval.md")
 
 
 if __name__ == "__main__":
