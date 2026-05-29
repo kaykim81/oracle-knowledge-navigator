@@ -27,6 +27,10 @@ from .models import Chunk, Product
 PRODUCTS: tuple[Product, ...] = ("erp", "epm", "oci")
 VECTOR_SIZE = 1024
 DISTANCE = models.Distance.COSINE
+# Upsert in batches: a single request with thousands of 1024-d vectors exceeds
+# the HTTP write timeout, so chunk the points per request.
+UPSERT_BATCH = 128
+DEFAULT_TIMEOUT = 120.0
 
 # Payload fields stored per point (everything except the vector). Chunk.id is
 # also the Qdrant point id, but we keep it in the payload too for convenience.
@@ -43,15 +47,16 @@ def get_client(
     url: str | None = None,
     host: str | None = None,
     port: int = 6333,
+    timeout: float = DEFAULT_TIMEOUT,
 ) -> QdrantClient:
     if location is not None:
         return QdrantClient(location=location)
     url = url or os.getenv("QDRANT_URL")
     if url:
-        return QdrantClient(url=url)
+        return QdrantClient(url=url, timeout=timeout)
     host = host or os.getenv("QDRANT_HOST", "qdrant")
     port = int(os.getenv("QDRANT_PORT", port))
-    return QdrantClient(host=host, port=port)
+    return QdrantClient(host=host, port=port, timeout=timeout)
 
 
 def init_collections(client: QdrantClient, *, recreate: bool = False) -> list[str]:
@@ -91,7 +96,8 @@ def upsert_chunks(
         point = models.PointStruct(id=chunk.id, vector=vector, payload=_payload(chunk))
         by_collection.setdefault(collection_for(chunk.product), []).append(point)
     for name, points in by_collection.items():
-        client.upsert(collection_name=name, points=points)
+        for i in range(0, len(points), UPSERT_BATCH):
+            client.upsert(collection_name=name, points=points[i : i + UPSERT_BATCH])
     return len(chunks)
 
 
