@@ -9,3 +9,4 @@ tiktoken==0.13.0
 voyageai==0.3.7
 httpx==0.28.1
 qdrant-client==1.18.0
+pymupdf==1.27.2.3

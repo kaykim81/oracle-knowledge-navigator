@@ -27,6 +27,7 @@ Run the smoke test with::
 from __future__ import annotations
 
 import re
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 
 import tiktoken
@@ -98,6 +99,71 @@ def _blocks_from_html(html: str) -> list[Block]:
             continue
         blocks.append(Block(tuple(t for _, t in stack), text))
     return blocks
+
+
+def _norm_ws(s: str) -> str:
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _blocks_from_pdf(path: str) -> list[Block]:
+    """Extract blocks from a PDF using font size for headings.
+
+    Headings are detected as text larger than the body font that appears on at
+    least two pages (this drops one-off cover-page display fonts). Running
+    headers/footers are dropped by skipping the top/bottom 8% margins. Heading
+    levels are ranked by size (largest = level 1), capped at 3 to mirror the
+    HTML h1/h2/h3 behaviour. pymupdf is imported lazily so only the ingestion
+    image needs the dependency.
+    """
+    import pymupdf
+
+    doc = pymupdf.open(path)
+    try:
+        mass: Counter[float] = Counter()
+        pages_per_size: dict[float, set[int]] = defaultdict(set)
+        for pno in range(doc.page_count):
+            for blk in doc[pno].get_text("dict")["blocks"]:
+                if blk.get("type") != 0:
+                    continue
+                for line in blk.get("lines", []):
+                    for span in line["spans"]:
+                        if span["text"].strip():
+                            size = round(span["size"], 1)
+                            mass[size] += len(span["text"].strip())
+                            pages_per_size[size].add(pno)
+        if not mass:
+            return []
+        body = mass.most_common(1)[0][0]
+        heading_sizes = sorted(
+            (s for s in mass if s > body + 0.9 and len(pages_per_size[s]) >= 2),
+            reverse=True,
+        )
+        level_map = {s: min(i + 1, 3) for i, s in enumerate(heading_sizes)}
+
+        blocks: list[Block] = []
+        stack: list[tuple[int, str]] = []
+        for pno in range(doc.page_count):
+            page = doc[pno]
+            margin = page.rect.height * 0.08
+            for blk in page.get_text("dict")["blocks"]:
+                if blk.get("type") != 0:
+                    continue
+                y0, y1 = blk["bbox"][1], blk["bbox"][3]
+                if y1 < margin or y0 > page.rect.height - margin:
+                    continue  # running header / footer band
+                spans = [sp for line in blk.get("lines", []) for sp in line["spans"]]
+                text = _norm_ws(" ".join(sp["text"] for sp in spans))
+                if not text:
+                    continue
+                size = round(max((sp["size"] for sp in spans), default=body), 1)
+                level = level_map.get(size)
+                if level and len(text) >= 3 and not text.isdigit():
+                    _update_stack(stack, level, text)
+                else:
+                    blocks.append(Block(tuple(t for _, t in stack), text))
+        return blocks
+    finally:
+        doc.close()
 
 
 def _blocks_from_text(text: str) -> list[Block]:
@@ -182,6 +248,9 @@ def chunk_blocks(
     buf: list[str] = []
     buf_tok = 0
     idx = 0
+    # Paragraphs are joined with "\n\n"; count that separator against the budget
+    # so packing many tiny paragraphs doesn't overflow max_tokens.
+    join_overhead = len(_enc().encode("\n\n"))
 
     def emit(text: str) -> None:
         nonlocal idx
@@ -218,10 +287,12 @@ def chunk_blocks(
             for piece in _split_oversized(text, max_tokens):
                 emit(piece)
             continue
-        if buf and buf_tok + ptok > max_tokens:
+        added = ptok + (join_overhead if buf else 0)
+        if buf and buf_tok + added > max_tokens:
             flush()
+            added = ptok  # buffer now empty: no separator
         buf.append(text)
-        buf_tok += ptok
+        buf_tok += added
     flush()
     return chunks
 
@@ -243,6 +314,18 @@ def chunk_text(
 ) -> list[Chunk]:
     return chunk_blocks(
         _blocks_from_text(text),
+        product=product,
+        doc_id=doc_id,
+        source_url=source_url,
+        **kwargs,
+    )
+
+
+def chunk_pdf(
+    path: str, *, product: Product, doc_id: str, source_url: str, **kwargs
+) -> list[Chunk]:
+    return chunk_blocks(
+        _blocks_from_pdf(path),
         product=product,
         doc_id=doc_id,
         source_url=source_url,
