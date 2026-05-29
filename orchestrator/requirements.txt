@@ -4,3 +4,5 @@
 
 anthropic==0.105.2
 mcp==1.27.2
+fastapi==0.136.3
+uvicorn[standard]==0.48.0
