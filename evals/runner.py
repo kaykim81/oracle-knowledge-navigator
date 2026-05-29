@@ -29,6 +29,7 @@ log = logging.getLogger("evals.runner")
 
 ORCHESTRATOR_URL = os.getenv("ORCHESTRATOR_URL", "http://orchestrator:8000")
 MODES = ["vector_only", "hybrid", "hybrid_rerank"]
+CATEGORIES = ["single", "cross", "adversarial"]
 DATASET = Path(__file__).parent / "dataset.jsonl"
 RESULTS_DIR = Path(__file__).parent / "results"
 QUERY_TIMEOUT = 300
@@ -60,6 +61,14 @@ def _chunks_from_trace(trace: list[dict]) -> list[dict]:
     return chunks
 
 
+def _category(q: dict) -> str:
+    if q["id"].startswith("adv-"):
+        return "adversarial"
+    if len(q["expected_products"]) > 1:
+        return "cross"
+    return "single"
+
+
 def _recall_hit(chunks: list[dict], keywords: list[str]) -> bool:
     """True if any retrieved chunk (section path + snippet) contains a keyword."""
     hay = " ".join(
@@ -88,6 +97,7 @@ def run() -> list[dict]:
             chunks = _chunks_from_trace(trace)
             row = {
                 "question_id": q["id"], "question": q["question"], "mode": mode,
+                "category": _category(q),
                 "expected_products": q["expected_products"], "products_called": products,
                 "routing_correct": set(products) == set(q["expected_products"]),
                 "expected_section_keywords": q["expected_section_keywords"],
@@ -109,13 +119,12 @@ def _percentile(values: list[float], p: float) -> float:
     return s[min(k, len(s) - 1)]
 
 
-def summarize(results: list[dict]) -> str:
+def _mode_table(rows: list[dict]) -> str:
     header = ("| mode | routing acc | retrieval recall | quality (mean) | correctness | "
               "groundedness | citation | latency p50 | p95 | n |")
-    sep = "|" + "---|" * 10
-    lines = [header, sep]
+    lines = [header, "|" + "---|" * 10]
     for mode in MODES:
-        rs = [r for r in results if r["mode"] == mode]
+        rs = [r for r in rows if r["mode"] == mode]
         if not rs:
             continue
         n = len(rs)
@@ -136,6 +145,15 @@ def summarize(results: list[dict]) -> str:
             f"{_percentile(lat,95):.0f} ms | {n} |"
         )
     return "\n".join(lines)
+
+
+def summarize(results: list[dict]) -> str:
+    sections = ["## Overall\n\n" + _mode_table(results)]
+    for cat in CATEGORIES:
+        rs = [r for r in results if r.get("category") == cat]
+        if rs:
+            sections.append(f"## {cat} ({len(rs)//len(MODES)} questions)\n\n" + _mode_table(rs))
+    return "\n\n".join(sections)
 
 
 def main() -> None:
