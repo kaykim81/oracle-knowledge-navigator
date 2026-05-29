@@ -1,0 +1,216 @@
+"""SQLite storage for chunks + FTS5 keyword (BM25) index.
+
+The ``chunks`` table mirrors the ``Chunk`` model one-to-one (``section_path`` is
+stored as a JSON string since SQLite has no list type). An external-content FTS5
+table ``chunks_fts`` indexes ``text`` for BM25 search and is kept in sync with
+``chunks`` by triggers, so callers only ever write to ``chunks``.
+
+Upserts key on the deterministic chunk ``id`` (see ``shared.models.Chunk``), so
+re-ingesting the same source is idempotent — no duplicate rows.
+
+This pairs with the Qdrant vector store; ``shared.retrieval`` (Phase 2) combines
+the BM25 results here with vector results from Qdrant.
+
+Smoke test (in-memory DB, no files touched)::
+
+    python -m shared.db
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import sqlite3
+from pathlib import Path
+
+from .models import Chunk, Product
+
+# data/sqlite/chunks.db under the project root; bind-mounted into containers.
+DB_PATH = Path(__file__).resolve().parent.parent / "data" / "sqlite" / "chunks.db"
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS chunks (
+    id           TEXT PRIMARY KEY,
+    product      TEXT NOT NULL,
+    doc_id       TEXT NOT NULL,
+    chunk_index  INTEGER NOT NULL,
+    text         TEXT NOT NULL,
+    section_path TEXT NOT NULL,   -- JSON-encoded list[str]
+    source_url   TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_chunks_product ON chunks(product);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+    text,
+    content='chunks',
+    content_rowid='rowid'
+);
+
+-- Keep the FTS index in sync with the chunks table.
+CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
+    INSERT INTO chunks_fts(rowid, text) VALUES (new.rowid, new.text);
+END;
+CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
+    INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES('delete', old.rowid, old.text);
+END;
+CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
+    INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES('delete', old.rowid, old.text);
+    INSERT INTO chunks_fts(rowid, text) VALUES (new.rowid, new.text);
+END;
+"""
+
+_UPSERT = """
+INSERT INTO chunks (id, product, doc_id, chunk_index, text, section_path, source_url)
+VALUES (:id, :product, :doc_id, :chunk_index, :text, :section_path, :source_url)
+ON CONFLICT(id) DO UPDATE SET
+    product=excluded.product,
+    doc_id=excluded.doc_id,
+    chunk_index=excluded.chunk_index,
+    text=excluded.text,
+    section_path=excluded.section_path,
+    source_url=excluded.source_url;
+"""
+
+
+def connect(db_path: Path | str = DB_PATH) -> sqlite3.Connection:
+    """Open a connection, creating the parent directory for file-based DBs."""
+    if db_path != ":memory:":
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db(conn: sqlite3.Connection) -> None:
+    conn.executescript(_SCHEMA)
+    conn.commit()
+
+
+def _chunk_to_params(chunk: Chunk) -> dict:
+    data = chunk.model_dump()
+    data["section_path"] = json.dumps(data["section_path"])
+    return data
+
+
+def upsert_chunks(conn: sqlite3.Connection, chunks: list[Chunk]) -> int:
+    """Insert or update chunks by id. Returns the number of rows written."""
+    if not chunks:
+        return 0
+    conn.executemany(_UPSERT, [_chunk_to_params(c) for c in chunks])
+    conn.commit()
+    return len(chunks)
+
+
+def _row_to_chunk(row: sqlite3.Row) -> Chunk:
+    return Chunk(
+        id=row["id"],
+        product=row["product"],
+        doc_id=row["doc_id"],
+        chunk_index=row["chunk_index"],
+        text=row["text"],
+        section_path=json.loads(row["section_path"]),
+        source_url=row["source_url"],
+    )
+
+
+def _fts_query(query: str) -> str:
+    """Build a safe FTS5 MATCH string: each word quoted, implicitly AND-ed."""
+    tokens = re.findall(r"\w+", query)
+    return " ".join(f'"{t}"' for t in tokens)
+
+
+def search_bm25(
+    conn: sqlite3.Connection,
+    query: str,
+    *,
+    product: Product | None = None,
+    limit: int = 10,
+) -> list[tuple[Chunk, float]]:
+    """BM25 keyword search. Returns (chunk, score) with higher score = better.
+
+    (FTS5's bm25() is lower-is-better, so we negate it for consistency with the
+    cosine scores from the vector store.)
+    """
+    match = _fts_query(query)
+    if not match:
+        return []
+    sql = (
+        "SELECT c.*, bm25(chunks_fts) AS bm25 "
+        "FROM chunks_fts JOIN chunks c ON c.rowid = chunks_fts.rowid "
+        "WHERE chunks_fts MATCH ?"
+    )
+    params: list = [match]
+    if product is not None:
+        sql += " AND c.product = ?"
+        params.append(product)
+    sql += " ORDER BY bm25 LIMIT ?"
+    params.append(limit)
+    return [(_row_to_chunk(row), -row["bm25"]) for row in conn.execute(sql, params)]
+
+
+def count_by_product(conn: sqlite3.Connection) -> dict[str, int]:
+    rows = conn.execute("SELECT product, COUNT(*) AS n FROM chunks GROUP BY product")
+    return {row["product"]: row["n"] for row in rows}
+
+
+# --------------------------------------------------------------------------- #
+# CLI smoke test (in-memory)
+# --------------------------------------------------------------------------- #
+
+
+def _smoke_test() -> None:
+    conn = connect(":memory:")
+    init_db(conn)
+
+    chunks = [
+        Chunk.create(product="erp", doc_id="erp-gl", chunk_index=0,
+                     text="A reversing journal entry reverses an existing journal.",
+                     source_url="https://x/gl", section_path=["General Ledger", "Journals"]),
+        Chunk.create(product="erp", doc_id="erp-gl", chunk_index=1,
+                     text="Accounts payable manages supplier invoices and payments.",
+                     source_url="https://x/gl", section_path=["Payables"]),
+        Chunk.create(product="oci", doc_id="oci-compute", chunk_index=0,
+                     text="A compute instance runs on a shape defining CPU and memory.",
+                     source_url="https://x/oci", section_path=["Compute"]),
+    ]
+    assert upsert_chunks(conn, chunks) == 3
+    assert count_by_product(conn) == {"erp": 2, "oci": 1}
+    print("OK: inserted 3 chunks ->", count_by_product(conn))
+
+    # BM25 search finds the right chunk and round-trips into a Chunk model
+    hits = search_bm25(conn, "journal entry")
+    assert hits and hits[0][0].doc_id == "erp-gl" and hits[0][0].chunk_index == 0
+    assert hits[0][0].section_path == ["General Ledger", "Journals"], "section_path lost"
+    print(f"OK: 'journal entry' -> {len(hits)} hit(s), top score {hits[0][1]:.3f}")
+
+    # product filter
+    erp_hits = search_bm25(conn, "instance shape", product="erp")
+    oci_hits = search_bm25(conn, "instance shape", product="oci")
+    assert not erp_hits and len(oci_hits) == 1
+    print("OK: product filter isolates collections")
+
+    # the plan's definition-of-done query shape works
+    rows = list(conn.execute(
+        "SELECT rowid, text FROM chunks_fts WHERE chunks_fts MATCH ? LIMIT 5", ('"journal"',)))
+    assert rows, "DoD MATCH query returned nothing"
+    print(f"OK: DoD-style 'SELECT rowid,text FROM chunks_fts MATCH' -> {len(rows)} row(s)")
+
+    # idempotency: re-upsert same ids -> count unchanged; text update reflected in FTS
+    assert upsert_chunks(conn, chunks) == 3
+    assert count_by_product(conn) == {"erp": 2, "oci": 1}, "duplicate rows on re-upsert"
+    updated = Chunk.create(product="erp", doc_id="erp-gl", chunk_index=0,
+                           text="Depreciation schedules apply to fixed assets.",
+                           source_url="https://x/gl", section_path=["Assets"])
+    upsert_chunks(conn, [updated])
+    assert count_by_product(conn) == {"erp": 2, "oci": 1}
+    assert not search_bm25(conn, "journal entry"), "old text still indexed after update"
+    assert search_bm25(conn, "depreciation"), "new text not indexed after update"
+    print("OK: idempotent upsert; FTS re-synced on text update")
+
+    conn.close()
+    print("\nALL DB SMOKE TESTS PASSED")
+
+
+if __name__ == "__main__":
+    _smoke_test()
