@@ -19,6 +19,7 @@ Smoke test (step 5)::
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import logging
 import time
@@ -151,3 +152,48 @@ async def _hybrid_rerank(query: str, product: str, top_k: int) -> list[SearchRes
                      latency_ms=latency_ms, rerank_latency_ms=rerank_latency_ms)
         for idx, score in ranking
     ]
+
+
+# --------------------------------------------------------------------------- #
+# CLI debugging tool
+# --------------------------------------------------------------------------- #
+
+
+def _print_results(query: str, product: str, mode: str, results: list[SearchResult]) -> None:
+    print(f"\nquery   : {query!r}")
+    print(f"product : {product}   mode: {mode}   results: {len(results)}")
+    if results:
+        top = results[0]
+        timing = f"{top.latency_ms} ms total"
+        if top.rerank_latency_ms is not None:
+            timing += f" ({top.rerank_latency_ms} ms rerank)"
+        print(f"latency : {timing}")
+    print("-" * 72)
+    for i, r in enumerate(results, 1):
+        path = " > ".join(r.chunk.section_path) or "(no section)"
+        snippet = " ".join(r.chunk.text.split())[:140]
+        print(f"{i:>2}. [{r.score:.4f}] {path}")
+        print(f"    {snippet}")
+        print(f"    {r.chunk.source_url}")
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="Query the hybrid retrieval engine")
+    ap.add_argument("--query", required=True)
+    ap.add_argument("--product", default="erp", help="erp | epm | oci")
+    ap.add_argument(
+        "--mode", default="hybrid_rerank",
+        choices=["vector_only", "hybrid", "hybrid_rerank"],
+    )
+    ap.add_argument("--top-k", type=int, default=5)
+    args = ap.parse_args()
+
+    # Keep dependency chatter out of the pretty output.
+    logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
+
+    results = asyncio.run(retrieve(args.query, args.product, args.mode, top_k=args.top_k))
+    _print_results(args.query, args.product, args.mode, results)
+
+
+if __name__ == "__main__":
+    main()
