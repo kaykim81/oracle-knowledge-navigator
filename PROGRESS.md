@@ -136,3 +136,17 @@ Tracks build state phase by phase. See `MASTER_PLAN.md` for the plan, `CLAUDE.md
 **Operational:** any MCP server image must be rebuilt (`docker compose up -d --build <svc>`) when `shared/` changes.
 
 ---
+
+## Phase 4: Clone for OCI and EPM — ✅ COMPLETE (2026-05-29)
+
+**Outcome:** Three federated MCP servers running, each scoped to one product, each returning results only from its own collection.
+
+**Approach (chose the step-5 refactor over literal copies):**
+- `shared/mcp_server.py`: `build_server(product, name, port, instructions, *descriptions)` factory holding the common tool bodies, read-only DB wiring, and `/health` route.
+- Per-product `server.py` files are thin (~55 lines of product/port/scope text): `erp` (8001), `oci` (8002), `epm` (8003). ERP refactored to use the factory.
+- Each `oci`/`epm` gets its own Dockerfile + requirements (identical deps); compose gains `oci-mcp` + `epm-mcp` services (internal, SQLite `:ro`).
+- EPM descriptions explicitly note the ERP↔EPM boundary (ERP records transactions; EPM consolidates/plans on top).
+
+**Definition of done — met:** live MCP client test on the VPS — each server's `search_docs` returned only its product's chunks (asserted `products == {product}`); all three `Up (healthy)`.
+
+---
