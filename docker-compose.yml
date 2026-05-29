@@ -70,6 +70,27 @@ services:
     depends_on:
       - qdrant
 
+  # Orchestrator — FastAPI + Claude agent loop, MCP client to the 3 servers. Internal only.
+  orchestrator:
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+    restart: unless-stopped
+    env_file: .env            # ANTHROPIC_API_KEY
+    environment:
+      ERP_MCP_URL: http://erp-mcp:8001/mcp
+      OCI_MCP_URL: http://oci-mcp:8002/mcp
+      EPM_MCP_URL: http://epm-mcp:8003/mcp
+    networks:
+      - navigator-internal
+    depends_on:
+      erp-mcp:
+        condition: service_healthy
+      oci-mcp:
+        condition: service_healthy
+      epm-mcp:
+        condition: service_healthy
+
   # On-demand ingestion tool. Not started by `docker compose up` (profiles).
   # Run with: docker compose run --rm ingestion
   ingestion:
