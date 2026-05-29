@@ -107,3 +107,32 @@ Tracks build state phase by phase. See `MASTER_PLAN.md` for the plan, `CLAUDE.md
 - **Operational:** the ingestion image must be rebuilt (`docker compose run --rm --build ingestion`) whenever `shared/` changes, or container-side runs use a stale copy.
 
 ---
+
+## Phase 3: First MCP Server — ERP — ✅ COMPLETE (2026-05-29)
+
+**Outcome:** A working ERP MCP server (`mcp_servers/erp/server.py`) over MCP streamable-HTTP, backed by the shared hybrid retrieval engine scoped to `erp`. Verified end-to-end from an MCP client container on the VPS.
+
+**Steps:**
+- 1 — SDK: official `mcp` 1.27.2, FastMCP server, **streamable-http** transport (clean; no stdio fallback needed).
+- 2–4 — Three tools: `search_docs` (→ `retrieve(product='erp')`), `get_document` (reconstructs a Document from its chunks), `list_topics`; tool docstrings spell out IN/OUT of scope for federation routing.
+- 5 — `mcp_servers/erp/Dockerfile` (python:3.11-slim, `/health` via stdlib-urllib healthcheck).
+- 6 — `erp-mcp` compose service: internal network, `restart: unless-stopped`, SQLite mounted `:ro`.
+- 7 — live MCP client test on the VPS.
+
+**Definition of done — met:**
+- `list_tools` → 3 tools with correct scoped descriptions.
+- `search_docs("reversing journal entries")` → relevant journal-reversal chunks (rerank 0.82/0.80/0.79).
+- `get_document(doc_id)` → full document text (753 KB reconstructed).
+- Logs clean; container `Up (healthy)`.
+
+**Decisions / additions:**
+- `shared/db.py`: `get_document`, `top_level_sections`, `chunks_for_doc`; `connect(read_only=True)` for the read-only bind mount (verified it reads and rejects writes).
+- `server.py` opens SQLite read-only and adds a `/health` route (FastMCP `custom_route`).
+
+**Deferred polish (cosmetic, not blocking):**
+- `get_document` title falls back to `doc_id` when the first chunk is front-matter with no heading (e.g. shows `erp-general-ledger` instead of "Using General Ledger"). Improve title derivation (e.g. most common top-level section, or carry the manifest title).
+- `list_topics` entries include PDF chapter-number prefixes ("2 Journals"); strip leading numbers.
+
+**Operational:** any MCP server image must be rebuilt (`docker compose up -d --build <svc>`) when `shared/` changes.
+
+---
