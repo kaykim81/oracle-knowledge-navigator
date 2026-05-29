@@ -1,0 +1,7 @@
+.env
+data/
+evals/results/
+ARCHITECTURE.md
+CLAUDE.md
+MASTER_PLAN.md
+PROJECT_CONTEXT.md
