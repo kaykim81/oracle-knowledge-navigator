@@ -11,6 +11,7 @@ WORKDIR /app
 COPY evals/requirements.txt ./evals/requirements.txt
 RUN pip install --no-cache-dir -r evals/requirements.txt
 
+COPY shared ./shared
 COPY evals ./evals
 
 CMD ["python", "-m", "evals.runner"]
