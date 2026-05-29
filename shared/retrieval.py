@@ -30,6 +30,8 @@ log = logging.getLogger(__name__)
 
 # Reciprocal Rank Fusion constant (standard value).
 RRF_K = 60
+# How many hybrid candidates to send to the reranker before taking top_k.
+RERANK_CANDIDATES = 30
 
 # Lazily-built, reusable clients (MCP servers call retrieve() repeatedly).
 # Tests inject in-memory instances via set_qdrant_client() / set_db_connection().
@@ -133,4 +135,19 @@ async def _hybrid(query: str, product: str, top_k: int) -> list[SearchResult]:
 
 
 async def _hybrid_rerank(query: str, product: str, top_k: int) -> list[SearchResult]:
-    raise NotImplementedError("hybrid_rerank: implemented in Phase 2 step 4")
+    """Hybrid-retrieve candidates, then re-score with Voyage rerank-2."""
+    t0 = time.perf_counter()
+    candidates = await _hybrid(query, product, RERANK_CANDIDATES)
+    if not candidates:
+        return []
+    docs = [c.chunk.text for c in candidates]
+    tr0 = time.perf_counter()
+    ranking = await asyncio.to_thread(embeddings.rerank, query, docs, top_k=top_k)
+    rerank_latency_ms = round((time.perf_counter() - tr0) * 1000, 1)
+    latency_ms = round((time.perf_counter() - t0) * 1000, 1)
+    return [
+        SearchResult(chunk=candidates[idx].chunk, score=score,
+                     retrieval_mode="hybrid_rerank",
+                     latency_ms=latency_ms, rerank_latency_ms=rerank_latency_ms)
+        for idx, score in ranking
+    ]

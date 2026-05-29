@@ -31,6 +31,7 @@ from voyageai import error as voyage_error
 log = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "voyage-3-large"
+RERANK_MODEL = "rerank-2"
 EMBEDDING_DIM = 1024
 BATCH_SIZE = 128
 
@@ -146,6 +147,43 @@ def embed_query(
 ) -> list[float]:
     """Embed a single query string (uses input_type='query')."""
     return embed_texts([text], input_type="query", model=model, client=client)[0]
+
+
+def rerank(
+    query: str,
+    documents: Sequence[str],
+    *,
+    model: str = RERANK_MODEL,
+    top_k: int | None = None,
+    max_retries: int = 6,
+    base_delay: float = 1.0,
+    client: voyageai.Client | None = None,
+) -> list[tuple[int, float]]:
+    """Rerank documents by relevance to the query.
+
+    Returns ``[(original_index, relevance_score)]`` ordered best-first, limited
+    to ``top_k`` if given. Same transient-error backoff as embedding.
+    """
+    if not documents:
+        return []
+    client = client or _get_client()
+    attempt = 0
+    while True:
+        try:
+            result = client.rerank(query, list(documents), model=model, top_k=top_k)
+            break
+        except _RETRYABLE as exc:
+            attempt += 1
+            if attempt > max_retries:
+                log.error("Voyage rerank failed after %d retries: %s", max_retries, exc)
+                raise
+            delay = base_delay * (2 ** (attempt - 1)) + random.uniform(0, base_delay)
+            log.warning(
+                "Voyage rerank %s (attempt %d/%d); backing off %.1fs",
+                type(exc).__name__, attempt, max_retries, delay,
+            )
+            time.sleep(delay)
+    return [(r.index, r.relevance_score) for r in result.results]
 
 
 # --------------------------------------------------------------------------- #
