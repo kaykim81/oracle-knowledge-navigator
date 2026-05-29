@@ -1,0 +1,31 @@
+# Oracle Knowledge Navigator — Docker Compose stack.
+# Built incrementally per MASTER_PLAN.md.
+# Phase 1 (step 2): Qdrant vector store only. Later phases add the MCP servers,
+# orchestrator, Streamlit UI (the only public service), and the on-demand
+# ingestion/eval tools. Everything here stays on the internal network until then.
+
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.15.5
+    restart: unless-stopped
+    # Persistent storage via bind mount. Relative path resolves under the project
+    # root in both the dev container and on the VPS (/docker/oracle-knowledge-navigator).
+    volumes:
+      - ./data/qdrant:/qdrant/storage
+    # Documents the listening ports without publishing them to the host.
+    # 6333 = HTTP/REST, 6334 = gRPC. Reachable only on the internal network.
+    expose:
+      - "6333"
+      - "6334"
+    networks:
+      - navigator-internal
+    # No `ports:` mapping on purpose — Qdrant is internal only. Other containers
+    # reach it as `qdrant:6333`. See README/PROGRESS for VPS verification steps.
+
+networks:
+  # Created by this compose file. Explicit `name:` so it is exactly
+  # "navigator-internal" regardless of the compose project directory name,
+  # which keeps service-discovery and verification commands predictable.
+  navigator-internal:
+    name: navigator-internal
+    driver: bridge
