@@ -91,6 +91,31 @@ services:
       epm-mcp:
         condition: service_healthy
 
+  # Streamlit UI — the ONLY publicly exposed service, via existing Traefik.
+  # Multi-homed: navigator-internal (to reach the orchestrator) + traefik_proxy (for routing).
+  ui:
+    build:
+      context: .
+      dockerfile: ui/Dockerfile
+    restart: unless-stopped
+    environment:
+      ORCHESTRATOR_URL: http://orchestrator:8000
+    networks:
+      - navigator-internal
+      - traefik_proxy
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik_proxy"
+      - "traefik.http.routers.navigator.rule=Host(`${PUBLIC_HOSTNAME}`)"
+      - "traefik.http.routers.navigator.entrypoints=websecure"
+      - "traefik.http.routers.navigator.tls.certresolver=mytlschallenge"
+      - "traefik.http.routers.navigator.middlewares=navigator-auth"
+      - "traefik.http.middlewares.navigator-auth.basicauth.users=${BASIC_AUTH_USER}:${BASIC_AUTH_PASSWORD_HASH}"
+      - "traefik.http.services.navigator.loadbalancer.server.port=8501"
+
   # On-demand ingestion tool. Not started by `docker compose up` (profiles).
   # Run with: docker compose run --rm ingestion
   ingestion:
@@ -115,3 +140,7 @@ networks:
   navigator-internal:
     name: navigator-internal
     driver: bridge
+  # Existing external network that Traefik is attached to. Declared external so
+  # compose does not create a duplicate; the UI joins it for public routing.
+  traefik_proxy:
+    external: true

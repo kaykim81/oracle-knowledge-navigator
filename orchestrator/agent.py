@@ -58,17 +58,44 @@ def _tool_result_payload(result) -> str:
     return "\n".join(parts) if parts else "[]"
 
 
-def _result_preview(payload: str, limit: int = 280) -> tuple[str, int | None]:
-    """A short preview of a tool result + a count if it's a list, for the trace."""
-    count = None
+def _summarize_result(payload: str):
+    """Compact, structured view of a tool result for the UI trace.
+
+    Returns (results, count). Claude still receives the full payload; this only
+    shapes what the trace shows: top chunks for search_docs, a header for
+    get_document, the raw list for list_topics.
+    """
     try:
-        parsed = json.loads(payload)
-        if isinstance(parsed, list):
-            count = len(parsed)
+        data = json.loads(payload)
     except (ValueError, TypeError):
-        pass
-    preview = payload if len(payload) <= limit else payload[:limit] + "…"
-    return preview, count
+        return (payload[:300], None)
+
+    if isinstance(data, list):
+        out = []
+        for item in data[:8]:
+            if isinstance(item, dict) and "chunk" in item:
+                chunk = item["chunk"]
+                out.append({
+                    "score": round(item.get("score", 0.0), 3),
+                    "section_path": chunk.get("section_path", []),
+                    "source_url": chunk.get("source_url", ""),
+                    "snippet": " ".join((chunk.get("text") or "").split())[:200],
+                })
+            else:
+                out.append(item)  # e.g. list_topics -> list[str]
+        return (out, len(data))
+
+    if isinstance(data, dict):  # get_document
+        text = data.get("full_text", "")
+        return ({
+            "id": data.get("id"),
+            "title": data.get("title"),
+            "source_url": data.get("source_url"),
+            "chars": len(text),
+            "snippet": " ".join(text.split())[:200],
+        }, None)
+
+    return (data, None)
 
 
 class OrchestratorAgent:
@@ -158,10 +185,10 @@ class OrchestratorAgent:
                 step_ms = round((time.perf_counter() - ts) * 1000, 1)
 
                 payload = _tool_result_payload(result)
-                preview, count = _result_preview(payload)
+                results, count = _summarize_result(payload)
                 trace.append({
                     "server": product, "tool": orig, "args": args,
-                    "num_results": count, "result_preview": preview, "latency_ms": step_ms,
+                    "num_results": count, "results": results, "latency_ms": step_ms,
                 })
                 tool_results.append({
                     "type": "tool_result", "tool_use_id": block.id, "content": payload,
