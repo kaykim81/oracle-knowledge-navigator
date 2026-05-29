@@ -1,0 +1,12 @@
+# Keep the build context small and secrets out of images.
+.git/
+.venv/
+data/
+__pycache__/
+*.pyc
+.env
+# Raw downloaded docs are re-fetched at run time; keep only the _index.json manifest.
+# (Listed explicitly rather than with a wildcard, which also matches _index.json.)
+ingestion/sources/erp
+ingestion/sources/epm
+ingestion/sources/oci

@@ -22,6 +22,23 @@ services:
     # No `ports:` mapping on purpose — Qdrant is internal only. Other containers
     # reach it as `qdrant:6333`. See README/PROGRESS for VPS verification steps.
 
+  # On-demand ingestion tool. Not started by `docker compose up` (profiles).
+  # Run with: docker compose run --rm ingestion
+  ingestion:
+    profiles: ["tools"]
+    build:
+      context: .
+      dockerfile: ingestion/Dockerfile
+    env_file: .env          # provides VOYAGE_API_KEY
+    environment:
+      QDRANT_HOST: qdrant   # reach the vector store by service name
+    volumes:
+      - ./data/sqlite:/app/data/sqlite   # persist chunks.db, shared with MCP servers
+    networks:
+      - navigator-internal
+    depends_on:
+      - qdrant
+
 networks:
   # Created by this compose file. Explicit `name:` so it is exactly
   # "navigator-internal" regardless of the compose project directory name,
