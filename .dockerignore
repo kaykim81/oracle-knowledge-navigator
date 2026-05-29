@@ -10,3 +10,5 @@ __pycache__/
 ingestion/sources/erp
 ingestion/sources/epm
 ingestion/sources/oci
+# Eval output is bind-mounted at run time; don't bake it into images.
+evals/results

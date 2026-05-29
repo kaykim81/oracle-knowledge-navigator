@@ -3,7 +3,7 @@
 __pycache__/
 *.pyc
 data/
-evals/results/
+evals/results/*.jsonl
 ingestion/sources/*
 !ingestion/sources/_index.json
 ARCHITECTURE.md

@@ -133,6 +133,23 @@ services:
     depends_on:
       - qdrant
 
+  # On-demand eval runner. Run with: docker compose run --rm evals
+  evals:
+    profiles: ["tools"]
+    build:
+      context: .
+      dockerfile: evals/Dockerfile
+    env_file: .env            # ANTHROPIC_API_KEY (orchestrator queries + judge)
+    environment:
+      ORCHESTRATOR_URL: http://orchestrator:8000
+    volumes:
+      - ./evals/results:/app/evals/results   # summaries land on the host
+    networks:
+      - navigator-internal
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+
 networks:
   # Created by this compose file. Explicit `name:` so it is exactly
   # "navigator-internal" regardless of the compose project directory name,

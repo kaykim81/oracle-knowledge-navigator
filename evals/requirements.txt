@@ -1,0 +1,3 @@
+# Eval runner deps. Hits the orchestrator over HTTP and judges with Claude.
+anthropic==0.105.2
+requests==2.34.2
