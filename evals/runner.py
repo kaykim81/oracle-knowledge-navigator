@@ -71,6 +71,10 @@ def _recall_hit(chunks: list[dict], keywords: list[str]) -> bool:
 
 def run() -> list[dict]:
     dataset = [json.loads(line) for line in DATASET.read_text().splitlines() if line.strip()]
+    limit = os.getenv("EVAL_LIMIT")
+    if limit:
+        dataset = dataset[: int(limit)]
+        log.info("EVAL_LIMIT=%s -> running %d questions", limit, len(dataset))
     results: list[dict] = []
     for q in dataset:
         for mode in MODES:
