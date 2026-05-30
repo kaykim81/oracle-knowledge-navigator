@@ -264,3 +264,14 @@ The plan lists five optional stretch goals and says to pick one or two. Three of
 **Not attempted (deliberately):** `tenant_id` schema primitive, live-Oracle-data MCP stub, query decomposition, and any further stretch work — the demo is feature-complete and the plan warns against piling on.
 
 ---
+
+## Post-build UI polish (2026-05-30)
+
+Small demo-quality tweaks after the feature work, on top of the streaming + cost-panel UI:
+- **Randomized sample questions** — each of the four sample buttons now draws from a pool (4–5 questions each) at random, avoiding an immediate repeat via a per-label `_last_sample` marker in session state. Makes the demo feel live across repeated clicks. Cross-product pool stays federation-exercising (every entry spans ERP↔EPM). Noted in `DEMO_SCRIPT.md`: buttons rotate, so click for a specific question or narrate whatever appears.
+- **Eval scorecard link** — sidebar link now points directly at `…/tree/main/evals/results` (derived from `REPO_URL`) instead of the repo root.
+- **README** — removed the stale "streaming" entry from "what I'd do next" (it's built); architecture diagram shows `POST /query/stream` (SSE); quick-start notes `--stream` and the per-question cost print.
+
+These are in the UI image — rebuild on the VPS (`docker compose up -d --build ui`) to see the sample/link changes live.
+
+---
