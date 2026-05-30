@@ -227,6 +227,94 @@ class OrchestratorAgent:
             "latency_ms": round((time.perf_counter() - t0) * 1000, 1),
         }
 
+    async def query_stream(
+        self, question: str, *, retrieval_mode: str | None = None, max_steps: int = MAX_STEPS
+    ):
+        """Streaming variant of ``query`` — an async generator of events.
+
+        Yields, in chronological order, the agent's progress so the UI can render
+        federation as it happens:
+
+        - ``{"type": "tool_call", server, tool, args, num_results, results, latency_ms}``
+          once per tool call, as the call completes (the trace builds live).
+        - ``{"type": "answer_delta", "text": ...}`` for each chunk of the answer
+          as Claude generates it (the final synthesis streams in).
+        - ``{"type": "done", trace, latency_ms}`` once, at the end.
+
+        Same per-request session model as ``query`` (see its docstring). Text is
+        streamed as it arrives from every step; in practice the tool-use steps
+        emit no text (the agent goes straight to tool calls), so ``answer_delta``
+        events carry only the final answer. ``query`` (non-streaming) is kept
+        separate so the eval's JSON contract on ``/query`` is unaffected.
+        """
+        t0 = time.perf_counter()
+        system = [{"type": "text", "text": self._system, "cache_control": {"type": "ephemeral"}}]
+        messages: list[dict] = [{"role": "user", "content": question}]
+        trace: list[dict] = []
+
+        async with AsyncExitStack() as stack:
+            sessions: dict[str, ClientSession] = {}
+
+            async def _session(product: str) -> ClientSession:
+                if product not in sessions:
+                    read, write, _ = await stack.enter_async_context(
+                        streamablehttp_client(self.servers[product])
+                    )
+                    session = await stack.enter_async_context(ClientSession(read, write))
+                    await session.initialize()
+                    sessions[product] = session
+                return sessions[product]
+
+            for _ in range(max_steps):
+                async with self._anthropic.messages.stream(
+                    model=self.model,
+                    max_tokens=MAX_TOKENS,
+                    system=system,
+                    tools=self._tools,
+                    messages=messages,
+                ) as stream:
+                    async for text in stream.text_stream:
+                        yield {"type": "answer_delta", "text": text}
+                    resp = await stream.get_final_message()
+
+                messages.append({"role": "assistant", "content": resp.content})
+
+                if resp.stop_reason != "tool_use":
+                    break
+
+                tool_results = []
+                for block in resp.content:
+                    if block.type != "tool_use":
+                        continue
+                    product, orig = self._routing[block.name]
+                    args = dict(block.input)
+                    if retrieval_mode and orig == "search_docs":
+                        args["mode"] = retrieval_mode
+
+                    session = await _session(product)
+                    ts = time.perf_counter()
+                    result = await session.call_tool(orig, args)
+                    step_ms = round((time.perf_counter() - ts) * 1000, 1)
+
+                    payload = _tool_result_payload(result)
+                    results, count = _summarize_result(payload)
+                    step = {
+                        "server": product, "tool": orig, "args": args,
+                        "num_results": count, "results": results, "latency_ms": step_ms,
+                    }
+                    trace.append(step)
+                    yield {"type": "tool_call", **step}
+                    tool_results.append({
+                        "type": "tool_result", "tool_use_id": block.id, "content": payload,
+                    })
+                messages.append({"role": "user", "content": tool_results})
+
+        yield {
+            "type": "done",
+            "trace": trace,
+            "latency_ms": round((time.perf_counter() - t0) * 1000, 1),
+        }
+
 
 # --------------------------------------------------------------------------- #
 # CLI (needs MCP servers reachable + ANTHROPIC_API_KEY)
@@ -237,12 +325,25 @@ async def _main() -> None:
     ap = argparse.ArgumentParser(description="Query the orchestrator agent")
     ap.add_argument("--question", required=True)
     ap.add_argument("--mode", default=None, help="pin retrieval mode for search_docs")
+    ap.add_argument("--stream", action="store_true", help="use the streaming generator")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
     agent = OrchestratorAgent()
     await agent.connect()
     try:
+        if args.stream:
+            print("=== STREAM ===")
+            async for event in agent.query_stream(args.question, retrieval_mode=args.mode):
+                if event["type"] == "answer_delta":
+                    print(event["text"], end="", flush=True)
+                elif event["type"] == "tool_call":
+                    print(f"\n[tool] {event['server']}.{event['tool']}({event['args']}) "
+                          f"-> {event['num_results']} results in {event['latency_ms']} ms\n")
+                elif event["type"] == "done":
+                    print(f"\n\n=== DONE ({event['latency_ms']} ms, "
+                          f"{len(event['trace'])} tool call(s)) ===")
+            return
         out = await agent.query(args.question, retrieval_mode=args.mode)
     finally:
         await agent.aclose()
