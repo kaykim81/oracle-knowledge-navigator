@@ -89,8 +89,9 @@ with st.sidebar:
 # --------------------------------------------------------------------------- #
 st.title("🔎 Oracle Knowledge Navigator")
 st.caption(
-    "A federated MCP demo. Ask about Oracle **ERP** (Financials), **OCI** (infrastructure), "
-    "or **EPM** — a single question can span products."
+    "Ask one question across three Oracle systems — **ERP** (financials and operations), "
+    "**OCI** (infrastructure), and **EPM** (strategic planning and financial analysis). "
+    "Answers are federated over MCP."
 )
 
 if "question" not in st.session_state:
