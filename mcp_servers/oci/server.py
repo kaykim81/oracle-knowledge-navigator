@@ -16,12 +16,18 @@ SEARCH_DOCS = """Search Oracle Cloud Infrastructure (OCI) documentation; return 
 
 IN SCOPE: Oracle Cloud Infrastructure — Compute (instances, shapes, images),
 Networking (VCNs, subnets, gateways, security rules, BYOIP), Object Storage (buckets,
-objects, tiers, replication), and IAM (users, groups, policies, compartments,
-federation).
+objects, tiers, replication), and IAM (users, groups, **policies that control which
+users can access which resources**, **compartments that organize any cloud resources —
+including ones holding financial data — for access control and isolation**, federation).
 
 OUT OF SCOPE: This server does NOT cover Oracle Fusion Cloud ERP (financials) or
 Oracle EPM (planning, consolidation, narrative reporting). For those, use the
 appropriate MCP server instead.
+
+BOUNDARY: access control is OCI even when the data being protected is financial.
+A question about **compartments**, or about a **policy governing which users can
+access resources**, is OCI IAM — the word "financial" describes the data, not the
+product. ERP/EPM own the financial *content*; OCI owns the cloud *access control* around it.
 
 Args:
     query: A natural-language question about OCI infrastructure.

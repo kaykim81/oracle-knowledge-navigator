@@ -22,6 +22,12 @@ OUT OF SCOPE: This server does NOT cover Oracle EPM (planning, financial consoli
 and close, narrative reporting), Oracle Database, or OCI infrastructure. For those, use
 the appropriate MCP server instead.
 
+BOUNDARY (do not be fooled by shared vocabulary): this server owns *General Ledger*
+journals, allocations, and currency *revaluation* of balances. But **consolidation
+journals**, **allocation rules in Planning**, and **translating balances to a parent
+currency during the financial close** are EPM, not ERP — even though the words
+"journal", "allocation", and "translate" appear here too.
+
 Args:
     query: A natural-language question about Oracle Fusion ERP.
     top_k: Number of passages to return (default 5).

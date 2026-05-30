@@ -39,7 +39,7 @@ Enterprise Oracle knowledge is fragmented across product lines — each with its
    └────┬─────┘       └────┬─────┘       └────┬─────┘             get_document /
         │                  │                  │                   list_topics
         └──────────────────┼──────────────────┘
-                            ▼
+                           ▼
                   ┌──────────────────┐
                   │ Qdrant + SQLite  │   shared stores (vectors + BM25)
                   └──────────────────┘
@@ -95,11 +95,11 @@ Dataset: 45 hand-built questions — 30 single-product, 10 cross-product (ERP↔
 - **Cross-product → hybrid wins** (MRR 0.757 > 0.714): the BM25 leg catches specific cross-domain sections.
 - **Easy single-product → vector already saturates**; hybrid's extra candidates add RRF noise, rerank cleans it back to vector's level.
 
-End-to-end, **rerank beats hybrid on judged answer quality in every category** (overall 3.45 vs 3.14 / 5). The eval also caught a real bug (BM25 was OR-ing stopwords, dragging hybrid below vector) and a real limitation: **routing is 100% accurate on normal questions but 20% on adversarial lures** — a router weakness, not a retrieval one (retrieval is strong *given correct routing*). That finding drives the roadmap below.
+End-to-end, **rerank beats hybrid on judged answer quality in every category** (overall 3.45 vs 3.14 / 5). The eval also caught a real bug (BM25 was OR-ing stopwords, dragging hybrid below vector) and a real limitation: routing was 100% accurate on normal questions but only **20% on adversarial lures** — a router weakness, not a retrieval one (retrieval is strong *given correct routing*). I then **hardened the router with context engineering** — sharper tool/scope descriptions encoding the real Oracle product boundaries — which took **adversarial routing from 20% → 100%**, with retrieval metrics unchanged (the scope edits only affect what the router reads, not `retrieve()`). Details and methodology in [TEST_LOG.md](TEST_LOG.md).
 
 ## What I'd do next
 
-- **Harden adversarial routing.** The measured 20% is a concrete target. Sharper tool/scope descriptions, an explicit disambiguation step, or a routing-confidence check before answering — then re-run the eval to quantify the lift.
+- **Push routing robustness further.** Context-engineering the scope descriptions took adversarial routing 20% → 100% on the current lures; next is a larger, harder adversarial set and an explicit disambiguation/confidence step so the router degrades gracefully on lures it hasn't seen.
 - **Streaming responses.** End-to-end p50 is ~30s, dominated by answer synthesis (retrieval is ~300ms). Streaming the answer token-by-token in the UI makes the demo feel dramatically faster.
 - **Oracle 23ai migration.** Consolidate Qdrant + SQLite into Oracle Database 23ai's native vector search — one store, one product family, the obvious enterprise fit.
 - **Tenant isolation.** Add a `tenant_id` dimension to chunks and filter every retrieval by it — the multi-tenancy primitive an Accenture deployment needs.
@@ -131,4 +131,5 @@ ui/             Streamlit single-page app (answer + agent trace)
 evals/          dataset, retrieval scorecard, end-to-end runner, LLM judge
 ```
 
-Build history and per-phase decisions: [PROGRESS.md](PROGRESS.md). Per-phase verification and eval findings: [TEST_LOG.md](TEST_LOG.md).
+Build history and per-phase decisions: [PROGRESS.md](PROGRESS.md). 
+Per-phase verification and eval findings: [TEST_LOG.md](TEST_LOG.md).

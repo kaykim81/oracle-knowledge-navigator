@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import statistics
 import time
 from pathlib import Path
@@ -69,6 +70,10 @@ async def evaluate() -> list[dict]:
     # Read-only SQLite (the chunks.db mount is :ro); share it with the retrieval engine.
     retrieval.set_db_connection(db.connect(read_only=True))
     dataset = [json.loads(line) for line in DATASET.read_text().splitlines() if line.strip()]
+    category = os.getenv("EVAL_CATEGORY")
+    if category:
+        dataset = [q for q in dataset if _category(q) == category]
+        log.info("EVAL_CATEGORY=%s -> running %d questions", category, len(dataset))
     rows: list[dict] = []
     for q in dataset:
         for product in q["expected_products"]:

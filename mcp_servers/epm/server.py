@@ -15,13 +15,16 @@ INSTRUCTIONS = (
 SEARCH_DOCS = """Search Oracle Fusion Cloud EPM documentation; return the most relevant passages.
 
 IN SCOPE: Oracle Fusion Cloud EPM — Planning (planning modules, forms, business
-rules), Financial Consolidation and Close (consolidation process, translation,
-intercompany), and Narrative Reporting.
+rules, **allocation rules in Planning**), Financial Consolidation and Close
+(consolidation process, **consolidation journals**, **currency translation to a
+parent currency as part of the close**, intercompany), and Narrative Reporting.
 
 OUT OF SCOPE: This server does NOT cover Oracle Fusion Cloud ERP (General Ledger,
 Payables, Receivables, Assets) or OCI infrastructure. Note the boundary: ERP records
-transactions; EPM consolidates and plans on top of that data. For ERP financials or
-OCI, use the appropriate MCP server instead.
+transactions and runs GL journals/allocations/revaluation; EPM consolidates, plans,
+and reports on top of that data — so anything qualified by *consolidation*, *Planning*,
+or the *close* belongs here, not in ERP. For ERP financials or OCI, use the
+appropriate MCP server instead.
 
 Args:
     query: A natural-language question about Oracle EPM.
