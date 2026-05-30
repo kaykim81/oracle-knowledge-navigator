@@ -96,14 +96,27 @@ Claude Sonnet 4.6 agent loop, MCP client to all three servers, namespaced tools.
 
 ### Results
 
-**End-to-end answer quality (6 easy-ERP dry run, judge mean 1–5):**
+**End-to-end (full run, 45 questions × 3 modes, LLM-judged):**
 
-| run | vector_only | hybrid | hybrid_rerank |
+Overall:
+
+| mode | routing acc | recall | quality (1–5) | latency p50 | p95 |
+|---|---|---|---|---|---|
+| vector_only | 91% | 98% | 3.45 | 31s | 100s |
+| hybrid | 91% | 98% | 3.14 | 33s | 121s |
+| hybrid_rerank | 91% | 100% | **3.45** | 28s | 76s |
+
+Judged quality by category (mean 1–5) — **rerank > hybrid in every category**:
+
+| category | vector_only | hybrid | hybrid_rerank |
 |---|---|---|---|
-| before stopword fix | 3.89 | 3.17 | 3.61 |
-| after stopword fix | 3.94 | 3.22 | 3.83 |
+| single (28) | 3.60 | 3.31 | **3.71** |
+| cross (10) | 3.33 | 2.93 | 3.00 |
+| adversarial (5) | 2.87 | 2.60 | 2.80 |
 
-(recall saturated at 100% on these easy questions.)
+Routing accuracy by category: single **100%**, cross **100%**, adversarial **20%**.
+
+(Earlier 6-question dry run showed the same direction; the BM25 stopword fix lifted hybrid 3.17 → 3.22 on it.)
 
 **Retrieval scorecard (55 question×product pairs, top_k=10):**
 
@@ -139,7 +152,15 @@ Strict (keyword in section path):
 - **Cross-product questions → hybrid wins** (MRR 0.757 > vector 0.714): the BM25 keyword leg catches the specific cross-domain sections; rerank over-reorders on the mixed-domain query and dips.
 - **Easy single-product → vector ≈ rerank > hybrid**: voyage-3-large already retrieves the right section first ~87% of the time; hybrid's keyword candidates add RRF noise; rerank cleans it back to vector's level.
 
-So both DoD criteria hold *in the right regime* — hybrid beats vector on recall for cross-product, and rerank beats hybrid (on adversarial retrieval, and on judged answer quality 3.83 vs 3.22). Hybrid + rerank earn their keep most on **harder inputs**; on a clean, well-embedded corpus with well-formed questions, pure vector is a strong baseline. (Caveats: adversarial n=5, cross n=20 — modest samples; directional.)
+So both DoD criteria hold *in the right regime* — hybrid beats vector on recall for cross-product, and **rerank beats hybrid on judged answer quality in every category** (overall 3.45 vs 3.14; single 3.71 vs 3.31). Hybrid + rerank earn their keep most on **harder inputs**; on a clean, well-embedded corpus with well-formed questions, pure vector is a strong baseline. (Caveats: adversarial n=5, cross n=20 — modest samples; directional.)
+
+### The routing finding (end-to-end)
+
+Routing accuracy is **100% on single-product and cross-product** questions but **20% on adversarial** ones: the orchestrator is **fooled by terminology lures** — "reverse a *consolidation* journal" routes to ERP (the word "journal") instead of EPM; "compartments for *financial data*" routes to ERP instead of OCI IAM. This is the cause of the low *end-to-end* adversarial quality across all three modes — it's a **routing miss, not a retrieval miss**. The retrieval scorecard (which forces the correct product) shows rerank doubling adversarial recall@1, i.e. **retrieval is fine given correct routing; the weakness is the router.** Fix: sharper tool descriptions, an explicit disambiguation step, or a routing check before answering.
+
+### Latency
+
+End-to-end p50 ~28–33s, p95 76–157s — the demo's real weakness, dominated by Claude synthesizing long answers across two sequential calls (retrieval is ~300ms). Mitigation: stream the answer in the UI and/or cap answer length (Phase 8).
 
 ### Debugging done (in the plan's order)
 
@@ -149,7 +170,9 @@ So both DoD criteria hold *in the right regime* — hybrid beats vector on recal
 
 ### Interview talking points
 
-- **Lead with the per-category result, not the aggregate.** "On the *adversarial* questions, reranking doubled top-1 precision (40% → 80%). On *cross-product*, the BM25 hybrid leg won on recall. On *easy* questions, vector already saturates and the extras add noise. The aggregate hides this because it's dominated by easy questions — so I broke it down by query type."
+- **Lead with the per-category result, not the aggregate.** "On the *adversarial* questions, reranking doubled retrieval top-1 precision (40% → 80%). On *cross-product*, the BM25 hybrid leg won on recall. On *easy* questions, vector already saturates and the extras add noise. The aggregate hides this because it's dominated by easy questions — so I broke it down by query type."
+- **The routing-robustness finding.** "I measured routing accuracy: 100% on normal single- and cross-product questions, but 20% on adversarial terminology lures — the agent follows the misleading word to the wrong product. That's a concrete, honest limitation; the retrieval is fine *given correct routing*, so the fix is in the router (tool descriptions / a disambiguation step), not the retrieval." Shows you find and reason about failure modes, not just happy paths.
+- **rerank > hybrid on answer quality in every category**, even though pure vector is a strong baseline on this corpus — reranking is what makes the hybrid candidate set pay off.
 - "The honest answer is *it depends on the corpus and query distribution*. I built the full hybrid + rerank pipeline **and** a rigorous eval that tells me exactly when each mode earns its keep."
 - The eval **caught a real bug** (BM25 stopword pollution dragging hybrid below vector) that eyeballing the demo never would — that's the point of evals as quality gates.
 - The methodology is the defensible part: two evaluation levels (retrieval + end-to-end), two relevance bars (lenient text / strict section), LLM-as-judge with a strict rubric over the Batches API, and a per-category cut. A flat or non-monotonic aggregate, honestly reported and decomposed, is more credible than a suspiciously clean curve.
