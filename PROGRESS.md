@@ -219,3 +219,32 @@ Tracks build state phase by phase. See `MASTER_PLAN.md` for the plan, `CLAUDE.md
 - Operational gap found: rebuilding MCP servers requires restarting the orchestrator (stale persistent sessions). Add reconnection-on-failure in Phase 8.
 
 ---
+
+## Phase 8: Polish & Documentation — ✅ COMPLETE (2026-05-30)
+
+**Outcome:** Repo is public and presentable; the demo is faster and more robust. All four user-set priorities done and verified live; remaining items are manual/operational.
+
+**What shipped:**
+- **`README.md`** — problem statement, ASCII architecture diagram, quick start, inline per-category eval table + the honest "input-dependent" finding, "what I'd do next", tech-stack rationale. Repo pushed to GitHub (success criterion #5 met).
+- **Routing hardening** — adversarial routing **20% → 100%**, via context engineering only: a "route by the distinctive concept, not generic vocabulary" principle in `system.md` + sharper ERP/EPM/OCI scope descriptions encoding real Oracle product boundaries. Verified by re-running `EVAL_CATEGORY=adversarial`; the retrieval scorecard is provably unchanged (the edits only affect what the router reads, not `retrieve()`). Encoded durable boundary facts, not question→answer mappings — generalizes, doesn't overfit the 5 eval questions.
+- **Streaming** — new `POST /query/stream` (SSE) + `query_stream()` generator emitting `tool_call` / `answer_delta` / `done` events; UI builds the trace live and streams the answer token-by-token. `POST /query` left unchanged so the eval's JSON contract holds. Verified on the VPS via CLI `--stream` **and** in-browser through Traefik (no proxy buffering).
+- **Per-request MCP sessions** — fixed the stale-session bug (an aborted request poisoned a shared session → HTTP 500 until manual restart). `connect()` now only discovers tools; `query`/`query_stream` open + close sessions per request via `AsyncExitStack`. Verified by reproducing the original Ctrl-C trigger: no 500s, no restart.
+- **Nits** — `_clean_heading()` strips leading section numbering from `list_topics` + `get_document` titles (PDF corpora carried "19 Managing…"); humanized the `get_document` doc_id fallback (`erp-gl` → "Erp Gl"). Both Phase 3 deferred items now closed.
+- **`EVAL_CATEGORY` filter** added to `runner.py` + `retrieval_eval.py` for cheap per-category re-runs.
+- **`DEMO_SCRIPT.md`** — 5–7 min interview walkthrough (kept local; gitignored like the other interview-context docs).
+
+**Definition of done — met:** a stranger can clone the public repo, read the README, and run it with their own keys.
+
+**Deviations from the plan (with reasoning):**
+- **Streaming and routing hardening are Phase 9 stretch items in the plan**, pulled into Phase 8 at the user's direction — the eval gave routing a concrete, measurable target (the 20%), and streaming addresses the demo's one real weakness (latency). Highest-value polish, so prioritized.
+- `DEMO_SCRIPT.md` is gitignored rather than committed (it's interview prep, like `PROJECT_CONTEXT.md`).
+
+**Deferred (manual/operational, user-owned):**
+- 90-second backup screen capture → unlisted YouTube, link from README.
+- `v1.0` git tag.
+- VPS state backup (`docker compose down` → tar `./data/` → copy off-VPS → re-up).
+- Rebuild the MCP server images on the VPS to pick up the `_clean_heading` change (cosmetic; doesn't affect routing/retrieval).
+
+**Notes:** full methodology, before/after numbers, and the verified-fix records are in `TEST_LOG.md`.
+
+---
