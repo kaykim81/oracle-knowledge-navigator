@@ -90,7 +90,7 @@ with st.sidebar:
 st.title("🔎 Oracle Knowledge Navigator")
 st.caption(
     "Ask one question across three Oracle systems — **ERP** (financials and operations), "
-    "**OCI** (infrastructure), and **EPM** (strategic planning and financial analysis). "
+    "**OCI** (cloud infrastructure), and **EPM** (planning and analysis). "
     "Answers are federated over MCP."
 )
 

@@ -1,6 +1,6 @@
 # Oracle Knowledge Navigator
 
-A federated, agentic RAG system over three Oracle product knowledge bases — **ERP** (Fusion Financials), **OCI** (Cloud Infrastructure), and **EPM** — exposed as independent [MCP](https://modelcontextprotocol.io) servers behind one orchestrating agent. Ask a question in plain English; the agent routes it to the right knowledge base(s), retrieves with a hybrid pipeline (vector + BM25 + rerank), and answers with citations. A single question can span products.
+A federated, agentic RAG system over three Oracle product knowledge bases — **ERP** (financials and operations), **OCI** (cloud infrastructure), and **EPM** (planning and analysis) — exposed as independent [MCP](https://modelcontextprotocol.io) servers behind one orchestrating agent. Ask a question in plain English; the agent routes it to the right knowledge base(s), retrieves with a hybrid pipeline (vector + BM25 + rerank), and answers with citations. A single question can span products.
 
 > Built as an interview demo for an **Applied AI Engineer** role on Accenture's **Oracle Business Group AI Center of Excellence**. It's a scaled-down, end-to-end proof of the pattern that practice runs at scale — many product-scoped knowledge servers, one agent federating across them, with retrieval quality measured and the whole thing deployed behind a real URL.
 
