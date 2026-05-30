@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 
 import requests
 import streamlit as st
@@ -21,12 +22,47 @@ ORCHESTRATOR_URL = os.getenv("ORCHESTRATOR_URL", "http://orchestrator:8000")
 REPO_URL = "https://github.com/kaykim81/oracle-knowledge-navigator"
 REQUEST_TIMEOUT = 240
 
+# Each button draws a fresh question at random from its pool on every click
+# (see pick_sample). Cross-product questions exercise federation across servers.
 SAMPLES = {
-    "ERP — single product": "How do I reverse a posted journal entry?",
-    "OCI — single product": "How do I create an Object Storage bucket in OCI?",
-    "EPM — single product": "How do I run a consolidation in EPM?",
-    "Cross-product (ERP → EPM)": "How does data flow from Fusion ERP into EPM Financial Consolidation and Close?",
+    "ERP — single product": [
+        "How do I reverse a posted journal entry?",
+        "How do I set up an allocation rule in General Ledger?",
+        "How do I record a manual payment for a supplier invoice?",
+        "How do I process a customer receipt in Accounts Receivable?",
+        "How do I run depreciation for a fixed asset?",
+    ],
+    "OCI — single product": [
+        "How do I create an Object Storage bucket in OCI?",
+        "How do I launch a compute instance?",
+        "How do I create a VCN with public and private subnets?",
+        "How do I write an IAM policy to grant access to a compartment?",
+        "What Object Storage tiers are available and when should I use each?",
+    ],
+    "EPM — single product": [
+        "How do I run a consolidation in EPM?",
+        "How do I translate balances to a parent currency during the close?",
+        "How do I create a data form in Planning?",
+        "How do I set up an allocation rule in Planning?",
+        "How do I manage intercompany eliminations in Financial Consolidation and Close?",
+    ],
+    "Cross-product (ERP → EPM)": [
+        "How does data flow from Fusion ERP into EPM Financial Consolidation and Close?",
+        "How do ERP General Ledger balances get loaded into EPM for consolidation?",
+        "How are intercompany transactions handled across ERP and EPM?",
+        "How does the period close coordinate between Fusion ERP and EPM?",
+    ],
 }
+
+
+def pick_sample(label: str) -> str:
+    """Pick a random question from a button's pool, avoiding an immediate repeat."""
+    pool = SAMPLES[label]
+    last = st.session_state.get("_last_sample", {}).get(label)
+    choices = [q for q in pool if q != last] or pool
+    chosen = random.choice(choices)
+    st.session_state.setdefault("_last_sample", {})[label] = chosen
+    return chosen
 
 st.set_page_config(page_title="Oracle Knowledge Navigator", page_icon="🔎", layout="wide")
 
@@ -59,11 +95,11 @@ st.caption(
 if "question" not in st.session_state:
     st.session_state.question = ""
 
-st.write("**Try a sample:**")
+st.write("**Try a sample** (each button picks a fresh question):")
 cols = st.columns(len(SAMPLES))
-for col, (label, sample) in zip(cols, SAMPLES.items()):
+for col, label in zip(cols, SAMPLES):
     if col.button(label, use_container_width=True):
-        st.session_state.question = sample
+        st.session_state.question = pick_sample(label)
 
 question = st.text_input("Your question", key="question", placeholder="Ask about Oracle ERP, OCI, or EPM…")
 ask = st.button("Ask", type="primary")
