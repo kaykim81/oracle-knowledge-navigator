@@ -111,6 +111,19 @@ def upsert_chunks(conn: sqlite3.Connection, chunks: list[Chunk]) -> int:
     return len(chunks)
 
 
+def _clean_heading(heading: str) -> str:
+    """Strip leading section numbering from a heading for display.
+
+    The PDF-sourced corpora (ERP, EPM) carry numbered top-level headings like
+    "19 Managing Consolidation Journals" or "2.3 Journals"; the HTML-crawled OCI
+    corpus does not. Drop a leading number (optionally dotted) so topic lists and
+    document titles read cleanly. If stripping would leave nothing (a heading that
+    is *only* a number, e.g. "25D"), keep the original.
+    """
+    cleaned = re.sub(r"^\d+(\.\d+)*\s+", "", heading).strip()
+    return cleaned or heading
+
+
 def _row_to_chunk(row: sqlite3.Row) -> Chunk:
     return Chunk(
         id=row["id"],
@@ -197,7 +210,10 @@ def get_document(conn: sqlite3.Connection, doc_id: str) -> Document | None:
     chunks = chunks_for_doc(conn, doc_id)
     if not chunks:
         return None
-    title = chunks[0].section_path[0] if chunks[0].section_path else doc_id
+    if chunks[0].section_path:
+        title = _clean_heading(chunks[0].section_path[0])
+    else:
+        title = doc_id.replace("-", " ").replace("_", " ").title()
     return Document(
         id=doc_id,
         product=chunks[0].product,
@@ -216,7 +232,7 @@ def top_level_sections(conn: sqlite3.Connection, product: Product) -> list[str]:
     for row in rows:
         path = json.loads(row["section_path"])
         if path:
-            tops.add(path[0])
+            tops.add(_clean_heading(path[0]))
     return sorted(tops)
 
 
@@ -281,6 +297,13 @@ def _smoke_test() -> None:
     assert get_document(conn, "does-not-exist") is None
     assert "Assets" in top_level_sections(conn, "erp")
     print("OK: get_document + top_level_sections")
+
+    # heading cleanup: strip leading numbering, keep number-only headings intact
+    assert _clean_heading("19 Managing Consolidation Journals") == "Managing Consolidation Journals"
+    assert _clean_heading("2.3 Journals") == "Journals"
+    assert _clean_heading("Compute Shapes") == "Compute Shapes"
+    assert _clean_heading("25D") == "25D"
+    print("OK: _clean_heading strips numbering, preserves number-only headings")
 
     conn.close()
     print("\nALL DB SMOKE TESTS PASSED")
