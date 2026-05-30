@@ -32,7 +32,7 @@ async def lifespan(app: FastAPI):
     await agent.connect()
     app.state.agent = agent
     log.info("orchestrator ready: %d tools across %d servers",
-             len(agent._tools), len(agent._sessions))
+             len(agent._tools), len(agent.servers))
     try:
         yield
     finally:

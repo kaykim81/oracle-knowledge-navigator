@@ -105,50 +105,61 @@ class OrchestratorAgent:
         self.servers = servers or DEFAULT_SERVERS
         self.model = model
         self._anthropic = AsyncAnthropic()
-        self._stack = AsyncExitStack()
-        self._sessions: dict[str, ClientSession] = {}
         self._tools: list[dict] = []          # namespaced tool defs for Claude
         self._routing: dict[str, tuple[str, str]] = {}  # tool name -> (product, orig)
         self._system: str = ""
 
     async def connect(self) -> None:
-        """Open sessions to all servers, discover + namespace their tools."""
+        """Discover each server's tools once and build the system prompt.
+
+        No MCP sessions are kept open between requests. ``query()`` opens fresh
+        per-request sessions instead, so a single aborted or cancelled request
+        can never corrupt a session that later requests share — the stale-session
+        bug that previously required a manual ``docker compose restart
+        orchestrator``. The only state retained here is read-only (tool defs +
+        the system prompt).
+        """
         base_prompt = _PROMPT_PATH.read_text()
         scope_sections: list[str] = []
 
         for product, url in self.servers.items():
-            read, write, _ = await self._stack.enter_async_context(streamablehttp_client(url))
-            session = await self._stack.enter_async_context(ClientSession(read, write))
-            init = await session.initialize()
-            self._sessions[product] = session
+            async with streamablehttp_client(url) as (read, write, _), \
+                    ClientSession(read, write) as session:
+                init = await session.initialize()
+                tools = (await session.list_tools()).tools
+                names = []
+                for tool in tools:
+                    namespaced = f"{product}_{tool.name}"
+                    self._tools.append({
+                        "name": namespaced,
+                        "description": tool.description or "",
+                        "input_schema": tool.inputSchema,
+                    })
+                    self._routing[namespaced] = (product, tool.name)
+                    names.append(namespaced)
+                instructions = (init.instructions or "").strip()
 
-            tools = (await session.list_tools()).tools
-            names = []
-            for tool in tools:
-                namespaced = f"{product}_{tool.name}"
-                self._tools.append({
-                    "name": namespaced,
-                    "description": tool.description or "",
-                    "input_schema": tool.inputSchema,
-                })
-                self._routing[namespaced] = (product, tool.name)
-                names.append(namespaced)
-
-            instructions = (init.instructions or "").strip()
             scope_sections.append(
                 f"### {product.upper()} — tools: {', '.join(names)}\n{instructions}"
             )
-            log.info("connected to %s (%s): %d tools", product, url, len(tools))
+            log.info("discovered %s (%s): %d tools", product, url, len(tools))
 
         self._system = base_prompt + "\n" + "\n\n".join(scope_sections) + "\n"
 
     async def aclose(self) -> None:
-        await self._stack.aclose()
+        """Release the Anthropic client. MCP sessions are per-request now."""
+        await self._anthropic.close()
 
     async def query(
         self, question: str, *, retrieval_mode: str | None = None, max_steps: int = MAX_STEPS
     ) -> dict:
-        """Run the tool-use loop for one question. Returns {answer, trace, latency_ms}."""
+        """Run the tool-use loop for one question. Returns {answer, trace, latency_ms}.
+
+        Opens fresh MCP sessions for this request only — lazily, one per product
+        as Claude first calls into it — and closes them all when the request
+        ends, including on error or cancellation. Nothing is shared with other
+        requests, so an aborted request cannot poison a later one.
+        """
         t0 = time.perf_counter()
         # cache_control on the (stable) system block caches tools+system across queries
         system = [{"type": "text", "text": self._system, "cache_control": {"type": "ephemeral"}}]
@@ -156,44 +167,59 @@ class OrchestratorAgent:
         trace: list[dict] = []
         answer = ""
 
-        for _ in range(max_steps):
-            resp = await self._anthropic.messages.create(
-                model=self.model,
-                max_tokens=MAX_TOKENS,
-                system=system,
-                tools=self._tools,
-                messages=messages,
-            )
-            messages.append({"role": "assistant", "content": resp.content})
-            answer = "".join(b.text for b in resp.content if b.type == "text")
+        async with AsyncExitStack() as stack:
+            sessions: dict[str, ClientSession] = {}
 
-            if resp.stop_reason != "tool_use":
-                break
+            async def _session(product: str) -> ClientSession:
+                """Get (or open, once) this request's session to a product server."""
+                if product not in sessions:
+                    read, write, _ = await stack.enter_async_context(
+                        streamablehttp_client(self.servers[product])
+                    )
+                    session = await stack.enter_async_context(ClientSession(read, write))
+                    await session.initialize()
+                    sessions[product] = session
+                return sessions[product]
 
-            tool_results = []
-            for block in resp.content:
-                if block.type != "tool_use":
-                    continue
-                product, orig = self._routing[block.name]
-                args = dict(block.input)
-                # Force the retrieval mode when the caller pins one (eval comparison).
-                if retrieval_mode and orig == "search_docs":
-                    args["mode"] = retrieval_mode
+            for _ in range(max_steps):
+                resp = await self._anthropic.messages.create(
+                    model=self.model,
+                    max_tokens=MAX_TOKENS,
+                    system=system,
+                    tools=self._tools,
+                    messages=messages,
+                )
+                messages.append({"role": "assistant", "content": resp.content})
+                answer = "".join(b.text for b in resp.content if b.type == "text")
 
-                ts = time.perf_counter()
-                result = await self._sessions[product].call_tool(orig, args)
-                step_ms = round((time.perf_counter() - ts) * 1000, 1)
+                if resp.stop_reason != "tool_use":
+                    break
 
-                payload = _tool_result_payload(result)
-                results, count = _summarize_result(payload)
-                trace.append({
-                    "server": product, "tool": orig, "args": args,
-                    "num_results": count, "results": results, "latency_ms": step_ms,
-                })
-                tool_results.append({
-                    "type": "tool_result", "tool_use_id": block.id, "content": payload,
-                })
-            messages.append({"role": "user", "content": tool_results})
+                tool_results = []
+                for block in resp.content:
+                    if block.type != "tool_use":
+                        continue
+                    product, orig = self._routing[block.name]
+                    args = dict(block.input)
+                    # Force the retrieval mode when the caller pins one (eval comparison).
+                    if retrieval_mode and orig == "search_docs":
+                        args["mode"] = retrieval_mode
+
+                    session = await _session(product)
+                    ts = time.perf_counter()
+                    result = await session.call_tool(orig, args)
+                    step_ms = round((time.perf_counter() - ts) * 1000, 1)
+
+                    payload = _tool_result_payload(result)
+                    results, count = _summarize_result(payload)
+                    trace.append({
+                        "server": product, "tool": orig, "args": args,
+                        "num_results": count, "results": results, "latency_ms": step_ms,
+                    })
+                    tool_results.append({
+                        "type": "tool_result", "tool_use_id": block.id, "content": payload,
+                    })
+                messages.append({"role": "user", "content": tool_results})
 
         return {
             "answer": answer,

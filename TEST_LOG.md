@@ -175,7 +175,11 @@ The 30 single + 10 cross questions still routed correctly in the same run cycle 
 
 Caveat: n=5, so "100%" means 5/5 — directional, not a precise rate. The lift is real (the lures that previously fooled the router now route correctly) but the sample is small.
 
-**Operational bug surfaced during this re-run:** aborting a run mid-request (Ctrl-C during an in-flight tool call) left one of the orchestrator's persistent MCP sessions in a broken state, and subsequent queries returned HTTP 500 until `docker compose restart orchestrator`. This is the known stale-session weakness already flagged for the reconnection-robustness work — a dropped client mid-tool-call shouldn't poison the session. Fix belongs in `orchestrator/agent.py` (reconnect-on-failure), not here.
+**Operational bug surfaced during this re-run — since fixed:** aborting a run mid-request (Ctrl-C during an in-flight tool call) left one of the orchestrator's persistent MCP sessions in a broken state, and subsequent queries returned HTTP 500 until `docker compose restart orchestrator`. Root cause: `connect()` opened the MCP sessions in the *startup* task but they were shared across all *request* tasks, so one aborted request corrupted a session a later request reused.
+
+**The fix (Phase 8):** the orchestrator now uses **per-request MCP sessions**. `connect()` discovers each server's tools once (read-only state: tool defs + system prompt) and closes those sessions immediately; `query()` opens fresh sessions inside an `AsyncExitStack` — lazily, one per product as the agent first routes to it — and closes them all when the request ends, including on error or cancellation. Nothing is shared between requests, so an aborted request can't poison a later one. Cost: a fresh `initialize()` handshake per product per request (~tens of ms over the internal Docker network), negligible against ~30s query latency.
+
+**Verified by reproducing the original trigger:** (1) a normal query returned a full cited answer; (2) a run was deliberately Ctrl-C'd mid-request; (3) an immediate re-run completed all 15 queries with **zero 500s and no restart** — exactly the sequence that previously required `docker compose restart orchestrator`. The `DELETE …/mcp 200 OK` lines in the orchestrator log confirm sessions are now torn down cleanly per request.
 
 ### Latency
 
