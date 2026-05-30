@@ -20,6 +20,7 @@ import streamlit as st
 
 ORCHESTRATOR_URL = os.getenv("ORCHESTRATOR_URL", "http://orchestrator:8000")
 REPO_URL = "https://github.com/kaykim81/oracle-knowledge-navigator"
+EVALS_URL = f"{REPO_URL}/tree/main/evals/results"
 REQUEST_TIMEOUT = 240
 
 # Each button draws a fresh question at random from its pool on every click
@@ -79,7 +80,7 @@ with st.sidebar:
         "scales across many Oracle product lines."
     )
     st.divider()
-    st.markdown(f"📊 **Eval scorecard:** see `evals/results/` in the [repo]({REPO_URL})")
+    st.markdown(f"📊 **Eval scorecard:** [`evals/results/`]({EVALS_URL}) in the repo")
     st.markdown(f"💻 **Source:** [{REPO_URL.split('//')[1]}]({REPO_URL})")
 
 
