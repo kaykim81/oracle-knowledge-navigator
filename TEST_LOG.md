@@ -98,7 +98,7 @@ The orchestrator now accumulates Claude token usage across every step of the too
 - **Honest scope:** Claude spend only — the Voyage embed/rerank cost (inside the MCP servers' `retrieve()`) is **not** counted, and is labelled as such everywhere. Claude dominates per-question cost, so this is the defensible headline, not a full bill.
 - **Sanity figures (arithmetic):** single-product ~$0.01–0.017, cross-product ~$0.03. The "input served from cache" metric reads ~0% on a cold first query and ~90%+ once the system+tools prefix is cached — a live, visible demonstration of the prompt-caching work.
 - **Interview talking point:** "I instrumented per-question cost — token breakdown and dollar figure in the trace. The cache-hit metric makes the prompt-caching savings visible: the first question pays to write the cache, every one after reads it for ~10% of the price."
-- **Status:** arithmetic verified; live VPS verification pending with the other runtime checks.
+- **Verified (VPS, browser):** the cost panel renders live below the trace on the demo, with the per-token caption and the "input served from cache" metric. Arithmetic verified separately.
 
 ---
 
