@@ -26,7 +26,7 @@ Enterprise Oracle knowledge is fragmented across product lines — each with its
                     ┌────────────────┐
                     │   Streamlit UI │   (the only public service)
                     └───────┬────────┘
-                            │  HTTP POST /query
+                            │  POST /query/stream (SSE: live trace + streamed answer)
                             ▼
                     ┌────────────────┐
                     │  Orchestrator  │   FastAPI + Claude agent loop (MCP client)
@@ -70,6 +70,8 @@ The UI is on port 8501 (behind Traefik in production; map it locally to browse d
 ```bash
 docker compose exec orchestrator python -m orchestrator.agent \
   --question "How does data flow from Fusion ERP into EPM consolidation?"
+# add --stream to watch the trace build and the answer stream token-by-token;
+# either way it prints the per-question Claude cost at the end.
 ```
 
 Most modules also have a CLI smoke test (e.g. `python -m shared.retrieval --help`). For a public deployment, the `ui` service's Traefik labels in [docker-compose.yml](docker-compose.yml) handle TLS and basic auth — set `PUBLIC_HOSTNAME`, `BASIC_AUTH_USER`, and `BASIC_AUTH_PASSWORD_HASH` in `.env` (see [.env.example](.env.example)) and attach to your existing Traefik network.
@@ -100,7 +102,7 @@ End-to-end, **rerank beats hybrid on judged answer quality in every category** (
 ## What I'd do next
 
 - **Push routing robustness further.** Context-engineering the scope descriptions took adversarial routing 20% → 100% on the current lures; next is a larger, harder adversarial set and an explicit disambiguation/confidence step so the router degrades gracefully on lures it hasn't seen.
-- **Streaming responses.** End-to-end p50 is ~30s, dominated by answer synthesis (retrieval is ~300ms). Streaming the answer token-by-token in the UI makes the demo feel dramatically faster.
+- **Cut answer-synthesis latency.** Streaming already makes the demo *feel* fast (p50 ~30s is dominated by synthesis, not retrieval's ~300ms); next is capping answer length and parallelizing the two sequential calls a cross-product question makes.
 - **Oracle 23ai migration.** Consolidate Qdrant + SQLite into Oracle Database 23ai's native vector search — one store, one product family, the obvious enterprise fit.
 - **Tenant isolation.** Add a `tenant_id` dimension to chunks and filter every retrieval by it — the multi-tenancy primitive an Accenture deployment needs.
 - **Scale the federation** from 3 to N servers (the pattern is already a factory + a registry) and **grow the eval set** (adversarial/cross samples are small — n=5/20 here).
