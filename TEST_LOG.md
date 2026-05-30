@@ -88,8 +88,8 @@ Claude Sonnet 4.6 agent loop, MCP client to all three servers, namespaced tools.
 
 Added a streaming path so the demo doesn't sit dead for ~30s while Claude synthesizes: the orchestrator exposes `POST /query/stream` (Server-Sent Events) alongside the unchanged `POST /query` (the eval's JSON contract). Events are `tool_call` (trace builds live), `answer_delta` (answer streams token-by-token via `messages.stream()`), and `done` (final trace + latency). The UI re-renders the trace as tool calls arrive and streams answer text into a placeholder.
 
-- **Verified (VPS):** `python -m orchestrator.agent --stream` prints answer tokens incrementally as they arrive — confirms the Anthropic stream → generator → SSE path end to end on the orchestrator side.
-- **Pending:** the browser path through Traefik (SSE buffering + Streamlit live re-render). The CLI test bypasses both. `X-Accel-Buffering: no` + `Cache-Control: no-cache` are set to discourage proxy buffering.
+- **Verified (VPS, CLI):** `python -m orchestrator.agent --stream` prints answer tokens incrementally as they arrive — confirms the Anthropic stream → generator → SSE path end to end on the orchestrator side.
+- **Verified (VPS, browser):** loading the live demo and asking a question streams the answer in token-by-token — confirms SSE survives Traefik (no proxy buffering) and Streamlit re-renders live. `X-Accel-Buffering: no` + `Cache-Control: no-cache` are set on the response to discourage proxy buffering.
 
 ---
 

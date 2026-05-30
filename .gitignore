@@ -8,5 +8,6 @@ ingestion/sources/*
 !ingestion/sources/_index.json
 ARCHITECTURE.md
 CLAUDE.md
+DEMO_SCRIPT.md
 MASTER_PLAN.md
 PROJECT_CONTEXT.md
