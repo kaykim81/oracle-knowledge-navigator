@@ -145,6 +145,33 @@ def render_trace(container, trace: list) -> None:
                 render_results(step.get("results"))
 
 
+def render_cost_panel(cost: dict) -> None:
+    """Show the per-question Claude cost: USD, output tokens, and cache savings.
+
+    Tracks the orchestrator's LLM spend only — the Voyage embed/rerank cost lives
+    in the MCP servers and is not counted here. Labelled accordingly so the figure
+    is honest rather than implying it's the full bill.
+    """
+    in_tok = cost.get("input_tokens", 0)
+    out_tok = cost.get("output_tokens", 0)
+    cache_read = cost.get("cache_read_input_tokens", 0)
+    cache_write = cost.get("cache_creation_input_tokens", 0)
+    # Fraction of *input* tokens served from cache (read / all input seen).
+    total_input = in_tok + cache_read + cache_write
+    cache_pct = (cache_read / total_input) if total_input else 0.0
+
+    st.markdown("#### 💰 Cost & tokens")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("LLM cost", f"${cost.get('usd', 0):.4f}")
+    c2.metric("Output tokens", f"{out_tok:,}")
+    c3.metric("Input from cache", f"{cache_pct:.0%}")
+    st.caption(
+        f"`{cost.get('model', 'claude')}` · in {in_tok:,} · out {out_tok:,} · "
+        f"cache-read {cache_read:,} · cache-write {cache_write:,} tok  ·  "
+        "Claude only — Voyage embed/rerank (in the MCP servers) not counted."
+    )
+
+
 def stream_query(question: str):
     """Yield SSE events from the orchestrator's /query/stream endpoint."""
     with requests.post(
@@ -172,6 +199,7 @@ if ask and question.strip():
     trace: list = []
     answer = ""
     latency_ms = 0
+    cost: dict = {}
     render_trace(trace_box, trace)
 
     try:
@@ -187,6 +215,7 @@ if ask and question.strip():
                 elif kind == "done":
                     latency_ms = event.get("latency_ms", 0)
                     trace = event.get("trace", trace)
+                    cost = event.get("cost", {})
     except requests.RequestException as exc:
         st.error(f"Could not reach the orchestrator: {exc}")
         st.stop()
@@ -198,3 +227,6 @@ if ask and question.strip():
     routed = ", ".join(servers) if servers else "no knowledge base needed (out of scope)"
     info_box.info(f"**Routed to:** {routed}  ·  **{len(trace)} tool call(s)**  ·  "
                   f"**{latency_ms:.0f} ms** total")
+
+    if cost:
+        render_cost_panel(cost)

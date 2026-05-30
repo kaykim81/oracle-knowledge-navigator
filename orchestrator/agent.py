@@ -6,9 +6,11 @@ runs a Claude tool-use loop: Claude decides which product(s) to query, the
 orchestrator forwards each call to the right MCP server, and the loop continues
 until Claude produces a final cited answer.
 
-``query()`` returns ``{answer, trace, latency_ms}`` where ``trace`` records every
-tool call (which server, args, a result preview, per-step latency) — this is what
-makes federation visible in the UI.
+``query()`` returns ``{answer, trace, latency_ms, cost}`` where ``trace`` records
+every tool call (which server, args, a result preview, per-step latency) — this is
+what makes federation visible in the UI. ``cost`` is the per-request Claude spend
+(token counts + USD) computed from the API usage; it tracks the orchestrator's LLM
+cost only (Voyage embed/rerank inside the MCP servers is not counted).
 
 Uses the Anthropic SDK directly (no LangChain/LangGraph), Claude Sonnet 4.6, with
 prompt caching on the stable system+tools prefix.
@@ -39,6 +41,46 @@ MODEL = "claude-sonnet-4-6"  # locked by the project (PROJECT_CONTEXT.md)
 MAX_TOKENS = 4096
 MAX_STEPS = 8  # safety bound on the tool-use loop
 _PROMPT_PATH = Path(__file__).parent / "prompts" / "system.md"
+
+# claude-sonnet-4-6 pricing, USD per million tokens (Anthropic list price).
+# cache-write is the 5-minute-TTL rate (1.25x base input); cache-read is 0.1x base.
+# This tracks ONLY the orchestrator's Claude spend — the Voyage embed/rerank cost
+# lives inside the MCP servers and is not visible here. Claude dominates per-question
+# cost, so this is the honest headline, labelled "LLM cost" in the UI.
+PRICE_PER_MTOK = {
+    "input": 3.00,
+    "output": 15.00,
+    "cache_write": 3.75,
+    "cache_read": 0.30,
+}
+
+
+def _cost_from_usage(usage) -> dict:
+    """Per-request Claude cost from a cumulative usage dict (USD)."""
+    cost = (
+        usage["input_tokens"] * PRICE_PER_MTOK["input"]
+        + usage["output_tokens"] * PRICE_PER_MTOK["output"]
+        + usage["cache_creation_input_tokens"] * PRICE_PER_MTOK["cache_write"]
+        + usage["cache_read_input_tokens"] * PRICE_PER_MTOK["cache_read"]
+    ) / 1_000_000
+    return {**usage, "model": MODEL, "usd": round(cost, 6)}
+
+
+def _accumulate_usage(totals: dict, usage) -> None:
+    """Add one API response's token counts into the running totals dict."""
+    totals["input_tokens"] += usage.input_tokens
+    totals["output_tokens"] += usage.output_tokens
+    totals["cache_creation_input_tokens"] += getattr(usage, "cache_creation_input_tokens", 0) or 0
+    totals["cache_read_input_tokens"] += getattr(usage, "cache_read_input_tokens", 0) or 0
+
+
+def _new_usage_totals() -> dict:
+    return {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+    }
 
 # Product -> MCP endpoint (service names on the internal Docker network).
 DEFAULT_SERVERS: dict[str, str] = {
@@ -153,7 +195,7 @@ class OrchestratorAgent:
     async def query(
         self, question: str, *, retrieval_mode: str | None = None, max_steps: int = MAX_STEPS
     ) -> dict:
-        """Run the tool-use loop for one question. Returns {answer, trace, latency_ms}.
+        """Run the tool-use loop for one question. Returns {answer, trace, latency_ms, cost}.
 
         Opens fresh MCP sessions for this request only — lazily, one per product
         as Claude first calls into it — and closes them all when the request
@@ -166,6 +208,7 @@ class OrchestratorAgent:
         messages: list[dict] = [{"role": "user", "content": question}]
         trace: list[dict] = []
         answer = ""
+        usage_totals = _new_usage_totals()
 
         async with AsyncExitStack() as stack:
             sessions: dict[str, ClientSession] = {}
@@ -189,6 +232,7 @@ class OrchestratorAgent:
                     tools=self._tools,
                     messages=messages,
                 )
+                _accumulate_usage(usage_totals, resp.usage)
                 messages.append({"role": "assistant", "content": resp.content})
                 answer = "".join(b.text for b in resp.content if b.type == "text")
 
@@ -225,6 +269,7 @@ class OrchestratorAgent:
             "answer": answer,
             "trace": trace,
             "latency_ms": round((time.perf_counter() - t0) * 1000, 1),
+            "cost": _cost_from_usage(usage_totals),
         }
 
     async def query_stream(
@@ -251,6 +296,7 @@ class OrchestratorAgent:
         system = [{"type": "text", "text": self._system, "cache_control": {"type": "ephemeral"}}]
         messages: list[dict] = [{"role": "user", "content": question}]
         trace: list[dict] = []
+        usage_totals = _new_usage_totals()
 
         async with AsyncExitStack() as stack:
             sessions: dict[str, ClientSession] = {}
@@ -277,6 +323,7 @@ class OrchestratorAgent:
                         yield {"type": "answer_delta", "text": text}
                     resp = await stream.get_final_message()
 
+                _accumulate_usage(usage_totals, resp.usage)
                 messages.append({"role": "assistant", "content": resp.content})
 
                 if resp.stop_reason != "tool_use":
@@ -313,6 +360,7 @@ class OrchestratorAgent:
             "type": "done",
             "trace": trace,
             "latency_ms": round((time.perf_counter() - t0) * 1000, 1),
+            "cost": _cost_from_usage(usage_totals),
         }
 
 
@@ -341,8 +389,10 @@ async def _main() -> None:
                     print(f"\n[tool] {event['server']}.{event['tool']}({event['args']}) "
                           f"-> {event['num_results']} results in {event['latency_ms']} ms\n")
                 elif event["type"] == "done":
+                    c = event["cost"]
                     print(f"\n\n=== DONE ({event['latency_ms']} ms, "
-                          f"{len(event['trace'])} tool call(s)) ===")
+                          f"{len(event['trace'])} tool call(s), "
+                          f"${c['usd']:.4f} LLM cost / {c['output_tokens']} out tok) ===")
             return
         out = await agent.query(args.question, retrieval_mode=args.mode)
     finally:
@@ -353,6 +403,11 @@ async def _main() -> None:
     for i, step in enumerate(out["trace"], 1):
         print(f"{i}. {step['server']}.{step['tool']}({step['args']}) "
               f"-> {step['num_results']} results in {step['latency_ms']} ms")
+    c = out["cost"]
+    print(f"\n=== LLM COST: ${c['usd']:.4f} "
+          f"(in {c['input_tokens']}, out {c['output_tokens']}, "
+          f"cache_read {c['cache_read_input_tokens']}, cache_write "
+          f"{c['cache_creation_input_tokens']} tok; Voyage excluded) ===")
 
 
 if __name__ == "__main__":
