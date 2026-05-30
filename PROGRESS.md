@@ -248,3 +248,19 @@ Tracks build state phase by phase. See `MASTER_PLAN.md` for the plan, `CLAUDE.md
 **Notes:** full methodology, before/after numbers, and the verified-fix records are in `TEST_LOG.md`.
 
 ---
+
+## Phase 9: Stretch Goals — ✅ PARTIAL (2026-05-30)
+
+The plan lists five optional stretch goals and says to pick one or two. Three of the five ended up done — streaming and routing robustness were pulled into Phase 8 (recorded above); the **cost dashboard** was built here. The other two (tenant_id primitive, live-data MCP stub, query decomposition) are deliberately **not** attempted, to keep the demo crisp per the plan's guidance.
+
+**Cost dashboard (stretch goal #5):**
+- `orchestrator/agent.py`: `claude-sonnet-4-6` pricing constants ($3/$15 base, $3.75 cache-write 5m, $0.30 cache-read — Anthropic list price). `query()` and `query_stream()` accumulate token usage across every step of the tool-use loop and return/emit a `cost` object (`{input/output/cache tokens, model, usd}`). `POST /query` gains the key (the eval ignores unknown keys, so its contract holds); the streaming `done` event carries it; the CLI prints it in both modes.
+- `ui/app.py`: a **cost panel below the trace** — `st.metric`s for USD, output tokens, and "input served from cache" %, plus a per-token caption.
+
+**Honest scoping (recorded so it's defensible in the interview):** this tracks **only the orchestrator's Claude spend**. The Voyage embed/rerank cost lives inside the MCP servers' `retrieve()` and is **not** counted. Labelled "LLM cost" / "Claude only" in code comments, CLI output, and the UI caption — never implying it's the full bill. The cache-savings % is `cache_read / total_input`, labelled "input served from cache", which turns the existing prompt-caching work into a visible number (~0% on a cold first query, ~90%+ once the system+tools prefix is cached).
+
+**Per-question cost (sanity figures, list price):** single-product ~$0.01–0.017, cross-product ~$0.03. Verified arithmetically; live VPS verification pending alongside the rest of the Phase 8/9 runtime checks.
+
+**Not attempted (deliberately):** `tenant_id` schema primitive, live-Oracle-data MCP stub, query decomposition, and any further stretch work — the demo is feature-complete and the plan warns against piling on.
+
+---

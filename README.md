@@ -45,7 +45,7 @@ Enterprise Oracle knowledge is fragmented across product lines — each with its
                   └──────────────────┘
 ```
 
-- The **orchestrator** connects to all three MCP servers, namespaces their tools (`erp_search_docs`, `oci_search_docs`, …), and runs a Claude tool-use loop: Claude picks the product(s), the orchestrator forwards each call, and the loop ends with a cited answer. Every tool call is captured in a **trace** the UI renders — federation made visible.
+- The **orchestrator** connects to all three MCP servers, namespaces their tools (`erp_search_docs`, `oci_search_docs`, …), and runs a Claude tool-use loop: Claude picks the product(s), the orchestrator forwards each call, and the loop ends with a cited answer. The answer **streams token-by-token** over SSE while every tool call is captured in a **trace** the UI renders — federation made visible — alongside a **per-question cost panel** (Claude spend + cache-hit %; Voyage retrieval cost excluded).
 - Each **MCP server** is product-scoped and identical in shape (one factory, `shared/mcp_server.py`); only its corpus, scope description, and port differ. Per-collection isolation means a server only ever returns its own product's chunks.
 - **Retrieval** (`shared/retrieval.py`) has three modes: `vector_only` (Qdrant, voyage-3-large), `hybrid` (vector + SQLite FTS5 BM25 fused with Reciprocal Rank Fusion), and `hybrid_rerank` (hybrid candidates reranked with Voyage rerank-2).
 - Only the **UI** is public (joined to both the internal network and Traefik's); everything else stays on an internal Docker network.

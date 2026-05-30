@@ -91,6 +91,15 @@ Added a streaming path so the demo doesn't sit dead for ~30s while Claude synthe
 - **Verified (VPS, CLI):** `python -m orchestrator.agent --stream` prints answer tokens incrementally as they arrive — confirms the Anthropic stream → generator → SSE path end to end on the orchestrator side.
 - **Verified (VPS, browser):** loading the live demo and asking a question streams the answer in token-by-token — confirms SSE survives Traefik (no proxy buffering) and Streamlit re-renders live. `X-Accel-Buffering: no` + `Cache-Control: no-cache` are set on the response to discourage proxy buffering.
 
+### Cost dashboard (Phase 9 stretch goal)
+
+The orchestrator now accumulates Claude token usage across every step of the tool-use loop and computes a per-question cost (`claude-sonnet-4-6` list price: $3/$15 base per Mtok, $3.75 cache-write 5m, $0.30 cache-read). It returns/emits a `cost` object on `query()`, the streaming `done` event, and the CLI; the UI renders a **cost panel below the trace** (USD, output tokens, "input served from cache" %).
+
+- **Honest scope:** Claude spend only — the Voyage embed/rerank cost (inside the MCP servers' `retrieve()`) is **not** counted, and is labelled as such everywhere. Claude dominates per-question cost, so this is the defensible headline, not a full bill.
+- **Sanity figures (arithmetic):** single-product ~$0.01–0.017, cross-product ~$0.03. The "input served from cache" metric reads ~0% on a cold first query and ~90%+ once the system+tools prefix is cached — a live, visible demonstration of the prompt-caching work.
+- **Interview talking point:** "I instrumented per-question cost — token breakdown and dollar figure in the trace. The cache-hit metric makes the prompt-caching savings visible: the first question pays to write the cache, every one after reads it for ~10% of the price."
+- **Status:** arithmetic verified; live VPS verification pending with the other runtime checks.
+
 ---
 
 ## Phase 7 — Evaluation (the methodology + findings)
