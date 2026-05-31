@@ -32,8 +32,18 @@ log = logging.getLogger(__name__)
 
 # Reciprocal Rank Fusion constant (standard value).
 RRF_K = 60
-# How many hybrid candidates to send to the reranker before taking top_k.
-RERANK_CANDIDATES = 30
+# How many candidates to send to the reranker before taking top_k.
+RERANK_CANDIDATES = int(os.getenv("RERANK_CANDIDATES", "30"))
+
+# hybrid_rerank tuning (env-toggleable so configs can be A/B'd via retrieval_eval
+# without a rebuild). Defaults reproduce the current behaviour.
+#   RERANK_POOL: where rerank candidates come from — "hybrid" (RRF of vector+BM25,
+#     the default) or "vector" (vector top-N only; the RRF leg adds noise on this
+#     corpus, so a cleaner pool may rerank better).
+#   RERANK_INCLUDE_PATH: prepend each chunk's section path to the text the reranker
+#     scores, giving rerank-2 the structural context the strict section bar rewards.
+RERANK_POOL = os.getenv("RERANK_POOL", "hybrid").lower()
+RERANK_INCLUDE_PATH = os.getenv("RERANK_INCLUDE_PATH", "0") not in ("0", "false", "")
 
 # Relevance floor for hybrid_rerank: drop results scoring below this so a query
 # with no genuinely relevant chunk returns [] and the orchestrator abstains
@@ -175,12 +185,25 @@ async def _hybrid_rerank(
     query: str, product: str, top_k: int, min_rerank_score: float | None = None,
     doc_ids: list[str] | None = None,
 ) -> list[SearchResult]:
-    """Hybrid-retrieve candidates, re-score with Voyage rerank-2, drop sub-floor."""
+    """Retrieve candidates, re-score with Voyage rerank-2, drop sub-floor.
+
+    Candidate pool and reranker input are tuned via ``RERANK_POOL`` /
+    ``RERANK_INCLUDE_PATH`` (see their definitions).
+    """
     t0 = time.perf_counter()
-    candidates = await _hybrid(query, product, RERANK_CANDIDATES, doc_ids)
+    if RERANK_POOL == "vector":
+        candidates = await _vector_only(query, product, RERANK_CANDIDATES, doc_ids)
+    else:
+        candidates = await _hybrid(query, product, RERANK_CANDIDATES, doc_ids)
     if not candidates:
         return []
-    docs = [c.chunk.text for c in candidates]
+    if RERANK_INCLUDE_PATH:
+        docs = [
+            (" > ".join(c.chunk.section_path) + "\n" + c.chunk.text).strip()
+            for c in candidates
+        ]
+    else:
+        docs = [c.chunk.text for c in candidates]
     tr0 = time.perf_counter()
     ranking = await asyncio.to_thread(embeddings.rerank, query, docs, top_k=top_k)
     rerank_latency_ms = round((time.perf_counter() - tr0) * 1000, 1)
