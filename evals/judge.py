@@ -50,16 +50,39 @@ def _prompt(row: dict) -> str:
     )
 
 
+_SCORE_FIELDS = ("correctness", "groundedness", "citation_quality")
+
+
+def _coerce(raw: dict) -> dict:
+    """Normalize a parsed judge dict: scores -> int in 0-5, rationale -> str.
+
+    The model is asked for integer scores but sometimes quotes them ("4") or
+    omits one; coercing here keeps a stray string out of the numeric aggregation
+    (statistics.mean) downstream.
+    """
+    out = dict(_ZERO)
+    for field in _SCORE_FIELDS:
+        try:
+            out[field] = max(0, min(5, int(float(raw.get(field, 0)))))
+        except (TypeError, ValueError):
+            out[field] = 0
+    out["rationale"] = str(raw.get("rationale") or out["rationale"])
+    return out
+
+
 def _parse(text: str) -> dict:
+    obj = None
     try:
-        return json.loads(text)
+        obj = json.loads(text)
     except (ValueError, TypeError):
         start, end = text.find("{"), text.rfind("}")
         if start != -1 and end != -1:
             try:
-                return json.loads(text[start : end + 1])
+                obj = json.loads(text[start : end + 1])
             except ValueError:
-                pass
+                obj = None
+    if isinstance(obj, dict):
+        return _coerce(obj)
     return dict(_ZERO, rationale="unparseable judge output")
 
 
