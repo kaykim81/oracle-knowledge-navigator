@@ -314,3 +314,22 @@ The refreshed scorecard put `vector_only` ahead of `hybrid_rerank` on the strict
 **Result:** tuned `hybrid_rerank` now **wins adversarial** (0.617 vs vector 0.539), **ties single** (0.747), **halves the cross gap** (0.449→0.515 vs 0.569), and is **~level overall** (0.598 vs 0.605). TEXT bar unchanged (~0.975), so no recall cost. Both levers are the default (`a528e14`, env-overridable) and deployed to the live demo. Scorecard `20260531T153941Z`.
 
 **Interview point:** I didn't accept "vector wins, rerank underperforms" — I formed two hypotheses, made them env-toggleable, A/B'd them for free on the retrieval eval, and *isolated* them. The pretty hypothesis (RRF noise) was wrong; the real win was a non-obvious synergy between a clean pool and structural context. Reranker now ~parity overall and best-in-class on the hard adversarial queries.
+
+### Component ablation — adding the keyword_only (BM25) baseline (2026-05-31)
+
+Added a `keyword_only` mode (BM25/FTS5 only; commit `74c0d2f`) so the full component ablation is *measured*, not inferred — keyword/vector/hybrid/hybrid_rerank. Scorecard below (strict section bar, overall MRR, n=60):
+
+| mode | overall MRR | role |
+|---|---|---|
+| keyword_only (BM25) | **0.485** | lexical component — weakest |
+| hybrid (RRF fusion) | 0.541 | fuses the two |
+| hybrid_rerank (tuned) | 0.598 | + reranking |
+| vector_only (dense) | **0.605** | semantic component — strongest |
+
+**What it settles:** the two components are keyword **0.485** and vector **0.605**; naive equal-weight RRF (`hybrid`) lands at **0.541** — *between* them, *below* the stronger. So on this corpus fusion helps the weak side and **hurts the strong side** — the dilution effect, now measured. "Is hybrid better than each alone?" → better than keyword (0.541>0.485), worse than vector (0.541<0.605).
+
+**Secondary findings:**
+- **Lenient bar exposes BM25's nature:** `keyword_only` hits 100% recall@5/@10 on the TEXT bar (BM25 retrieves keyword-containing chunks *by construction*) yet is weakest on the strict bar — it finds the right *words*, not the right *section*. This is why the lenient bar saturates and the strict bar discriminates.
+- **Adversarial: keyword is worst (0.436)** — terminology lures are precisely BM25's failure mode, which is why those queries need semantics + reranking (rerank 0.617).
+
+`keyword_only` is an analysis/ablation mode only — not in the end-to-end runner or the MCP/demo surface (production stays on hybrid_rerank).
