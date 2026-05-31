@@ -218,3 +218,38 @@ End-to-end p50 ~28–33s, p95 76–157s — the demo's real weakness, dominated 
 - The eval **caught a real bug** (BM25 stopword pollution dragging hybrid below vector) that eyeballing the demo never would — that's the point of evals as quality gates.
 - The methodology is the defensible part: two evaluation levels (retrieval + end-to-end), two relevance bars (lenient text / strict section), LLM-as-judge with a strict rubric over the Batches API, and a per-category cut. A flat or non-monotonic aggregate, honestly reported and decomposed, is more credible than a suspiciously clean curve.
 - Where I'd push next: larger adversarial/cross samples (n=5/20 here), a harder/representative query set (exact IDs, abbreviations, typos), human-labeled gold chunks, and re-running at larger corpus scale where hybrid/rerank separate more.
+
+---
+
+## Post-chunking-fix re-eval & grounding investigation (2026-05-31)
+
+A chunking-quality fix (corpus re-packed 7740 → 2574 right-sized chunks; see `PROGRESS.md`) prompted a full re-eval. The fix moved the numbers in three distinct ways, and chasing the third surfaced a real, pre-existing grounding weakness. New scorecards: `20260531T022451Z_retrieval` (post-fix baseline), `20260531T024257Z_summary` (judge), `20260531T123618Z_retrieval` (floor=0.6).
+
+### Three-layer result
+
+1. **TEXT-bar retrieval held; SECTION bar regressed.** Lenient recall stayed ~98% — content is still retrievable. Strict section-path recall fell (`hybrid_rerank` MRR 0.78 → 0.61) because merged chunks carry the *longest shared* heading path, so breadcrumbs are shallower. An offline experiment proved this is **not tunable away**: four labeling rules (common-prefix / first-block / deepest / dominant) moved path-keyword recoverability only 78% → 80%, and reverting the heading detection only 80% → 84%. The old over-fragmentation was *accidentally* optimal for a path-keyword metric. Accepted tradeoff.
+
+2. **The judge "quality drop" was largely an eval artifact.** Correctness/groundedness looked down vs the 05-29 baseline, but (a) that baseline pre-dates Phase 8/9 changes — not a clean A/B; (b) decisively, the judge sees only a **200-char snippet** per chunk (`agent.py` `_summarize_result`, trace-only) — ~35% of an old tiny chunk but only ~8% of a new ~660-tok one — so groundedness was systematically under-measured. The *answering* model gets full chunk text, so answers weren't degraded by chunk size. **Eval bug to fix: judge on full chunk text, not the trace snippet.**
+
+3. **Hallucination on weak retrieval — real and pre-existing.** Lowest-groundedness rows were genuine retrieval misses: off-topic/boilerplate chunks returned, then the agent answered from general knowledge. Root cause: **no relevance floor**, so the system prompt's "abstain if nothing relevant" never fired (`retrieve()` always returned top_k).
+
+### Fixes attempted (and their honest verdicts)
+
+- **Relevance floor (fix #1) — SHELVED.** `RETRIEVAL_MIN_RERANK_SCORE`, rerank-only (the one calibrated-score mode; RRF and cosine aren't). VPS A/B: at **0.6** it cleanly abstains on single-product coverage-gap queries (off-topic ~0.50–0.55) while keeping good hits (~0.71–0.84). **But** it craters **cross-product** recall **90% → 25%**: legitimate cross-product chunks also score ~0.5 (each only partly addresses a compound query), overlapping the off-topic band — *no global threshold separates them*. Left inactive by default; mechanism retained for single-product use.
+- **Grounding prompt #3 — insufficient.** "Abstain when passages don't address the question" made the model search harder and cite sources (good traceability) but it still synthesized FCC content into a Planning answer.
+- **Sub-domain-aware prompt — partial win.** Naming the exact trap (EPM = Planning/FCC/Narrative, don't cross-apply; use each chunk's source doc; honor in-text applicability notes) got the answer to **lead with Planning-genuine content, label FCC-sourced quotes, and cite the Planning guide as the authority** — but it still blends some FCC material.
+
+### Root cause & the honesty note
+
+The `epm` knowledge base **conflates three EPM modules in one collection**, so a Planning question retrieves FCC chunks. The durable fix is data/architecture (per-module sub-collections or a module filter), not prompt-tuning — logged as future work.
+
+**On the limits of automated verification:** a fact-check agent labeled the FCC-sourced answer "well-cited-but-wrong" because the FCC guide marks those scenario properties "not used in Financial Consolidation and Close." That verdict **over-read the disclaimer** — Start/End Yr and Exchange Rate Table are almost certainly genuine *Planning* scenario properties (the FCC note means "FCC ignores these," implying they apply elsewhere). At this depth both the system's answers *and* our automated checks carry Oracle domain uncertainty; reliable adjudication needs an SME. We stopped tuning here.
+
+### Interview talking points (this arc)
+
+- **A fix that "passes" its target metric can still move others — measure the blast radius.** The chunking fix nailed chunk size and held TEXT-bar recall (98%), but I checked the strict SECTION bar too and found a real regression, then *proved* it wasn't tunable (4 labeling rules + a heading-detection revert) rather than guessing.
+- **Distinguish a real regression from an eval artifact.** The judge's groundedness "drop" was mostly a 200-char trace-snippet truncation interacting with bigger chunks — the answering model had full context. Knowing *what the judge actually sees* mattered more than the number.
+- **Calibrate thresholds to the right score scale.** My first floor (0.1) was inert because I'd reasoned from RRF scores (~0.03); the production reranker scores off-topic at ~0.5. Re-derived from data (good ~0.8 vs no-answer ~0.5) → 0.6.
+- **Know when a knob can't work.** A single relevance floor can't separate cross-product-relevant (~0.5) from off-topic (~0.5) — they overlap. Recognizing the impossibility beat shipping a number that quietly halves cross-product recall.
+- **Name the failure mode in the prompt.** Generic "don't guess" failed; "EPM = three modules that don't cross-apply, here's the source signal" partly worked. Specific beats general.
+- **Be honest about your own tools.** The fact-check agent was confidently wrong (over-read a disclaimer). Automated verification is a strong filter, not an oracle — at domain-expertise depth, flag the uncertainty instead of trusting the verdict.

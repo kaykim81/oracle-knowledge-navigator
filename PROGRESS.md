@@ -79,7 +79,7 @@ Tracks build state phase by phase. See `MASTER_PLAN.md` for the plan, `CLAUDE.md
 
 ## Phase 2: Hybrid Retrieval Library — ✅ COMPLETE (2026-05-29)
 
-**Outcome:** `shared/retrieval.py` exposes one engine — `async retrieve(query, product, mode, top_k)` — with three modes, used by all MCP servers and measured by the eval scorecard.
+**Outcome:** `shared/retrieval.py` exposes one engine — `async retrieve(query, product, mode, top_k)` — with three modes, used by all MCP servers and measured by the eval scorecard. 
 
 **Steps:**
 - 1 — `retrieve()` scaffold + signature; `product` is a plain string (no hardcoded list).
@@ -312,5 +312,25 @@ Post-fix `section_path`s read like a real TOC (`2 Journals > Reverse Journals`, 
 | **total** | **7740** | **2574** |
 
 ~3× fewer chunks; implied mean ~640 tok/chunk (was 213), squarely in the 400–800 band. Same source text and ~1.7M embedded tokens, just packed correctly — so embedding cost was unchanged, not cheaper. All 4 ERP PDFs (incl. the three not committed locally) chunked without anomaly. The Phase 1 count table above is annotated as superseded by these numbers.
+
+---
+
+## Post-chunking-fix eval impact & grounding investigation (2026-05-31)
+
+After the re-ingest we re-ran the evals to check the chunking fix didn't regress retrieval. It did move the numbers, in three distinct ways — and chasing the third uncovered a real (pre-existing) grounding weakness. Full eval detail is in `TEST_LOG.md`; this is the build-state summary. Commits: chunking `e0714e2`, floor `6e6b9f3`, grounding prompts `439aeb2` + `45289a3`, scorecards `a7b6fc0`.
+
+**1. Retrieval recall — TEXT bar held, SECTION bar regressed.** `retrieval_eval` TEXT-bar recall stayed ~98% (content still retrievable). The strict SECTION bar (keyword in section path) dropped (`hybrid_rerank` MRR 0.78→0.61) — an inherent cost of coarser chunks: merged chunks carry the *longest shared* heading path, so breadcrumbs are shallower. **Confirmed not fixable by tuning:** an offline experiment over four labeling rules (common-prefix / first-block / deepest / dominant) moved recoverability only 78%→80%, and reverting to the pre-fix heading detection only 80%→84%. The old over-fragmentation was accidentally optimal for a path-keyword metric. Accepted as a known tradeoff — content retrieval (the TEXT bar) is what feeds answer quality, and it held.
+
+**2. Judge quality "drop" — largely an eval artifact.** A judge re-run showed correctness/groundedness down vs the 2026-05-29 baseline, but that baseline pre-dates Phase 8/9 code changes (not a clean A/B) and, decisively, the judge is shown only a **200-char snippet** of each chunk ([agent.py](orchestrator/agent.py) `_summarize_result`) — which covered ~35% of the old tiny chunks but only ~8% of the new ~660-tok ones, so groundedness was under-measured. The *answering* model received full chunks (the snippet is trace-only), so answers weren't degraded by size. Eval-harness bug logged as future work (judge on full text, not the trace snippet).
+
+**3. Hallucination on weak retrieval — real, pre-existing, only partly fixed.** The lowest-groundedness rows were genuine retrieval misses: off-topic/boilerplate chunks returned, then answered from general knowledge. Root cause (verified): **no relevance floor in `retrieve()`**, so the orchestrator's "abstain if nothing relevant" rule never fired (retrieval always returned top_k). Attempted fixes:
+
+- **Relevance floor (`6e6b9f3`, fix #1) — SHELVED.** Env-tunable `RETRIEVAL_MIN_RERANK_SCORE`, applied to `hybrid_rerank` only (the sole calibrated-score mode). Verified on the VPS: at 0.6 it cleanly makes single-product coverage-gap queries abstain (off-topic ~0.50–0.55) while keeping good hits (~0.71–0.84). **But** it craters cross-product recall (90%→25%): legitimate cross-product chunks also score ~0.5 (each addresses only part of a compound query), the *same band* as off-topic boilerplate — no global threshold separates them. Default left **inactive (0.1)**; the mechanism stays for single-product deployments.
+- **Grounding prompt (`439aeb2`, fix #3) — insufficient.** Strengthened "abstain when passages don't address the question." The model instead searched harder and produced a confident answer *with* citations — better traceability, but it pulled Financial-Consolidation (FCC) scenario content into a *Planning* answer.
+- **Sub-domain-aware prompt (`45289a3`) — partial improvement.** Told the model that EPM spans distinct modules (Planning/FCC/Narrative) that don't cross-apply, to use each chunk's source doc, and to honor in-text applicability notes. Re-run: the answer now **leads with Planning-genuine content, labels its FCC-sourced quotes, and points to the Planning guide as the authority** — but still blends some FCC material.
+
+**The deeper root cause:** the `epm` knowledge base conflates three EPM modules in one Qdrant collection, so a Planning question retrieves FCC chunks. Real fix is data/architecture (split EPM into per-module sub-collections or add a module filter) — out of scope for the demo; logged as future work.
+
+**Honesty note — limits of automated verification.** A fact-check agent flagged the FCC-sourced answer as "well-cited-but-wrong" because the FCC guide's Table 14-11 marks those scenario properties "not used in Financial Consolidation and Close." On review that verdict **over-read the disclaimer**: those properties (scenario Start/End Yr, Exchange Rate Table) are almost certainly genuine *Planning* properties — the FCC note means "FCC ignores these," implying they apply elsewhere. At this depth, both the system's answers and our automated checks carry Oracle domain uncertainty; reliable adjudication needs an SME, not another agent pass. Stopped tuning here — the chunking fix is the solid deliverable; the grounding findings are a characterized, honestly-bounded investigation.
 
 ---
