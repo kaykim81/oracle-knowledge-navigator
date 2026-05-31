@@ -42,6 +42,8 @@ Tracks build state phase by phase. See `MASTER_PLAN.md` for the plan, `CLAUDE.md
 
 ~1.7M Voyage tokens embedded (voyage-3-large, 1024-d).
 
+> **Superseded 2026-05-31.** These counts reflect the original chunker, which over-fragmented the corpus (mean ~213 tok/chunk). After the chunking-quality fix the corpus was re-ingested to **erp 947 / epm 873 / oci 754 = 2574** (both stores reconcile). Same source text, same ~1.7M embedded tokens — just packed into right-sized chunks. See the "Chunking quality fix" entry at the end of this file.
+
 **Steps:**
 - 1 — `ingestion/sources/_index.json`: source manifest (11 URLs verified 200).
 - 2 — Qdrant in `docker-compose.yml` (v1.15.5, internal-only, bind-mounted).
@@ -300,6 +302,15 @@ Post-fix `section_path`s read like a real TOC (`2 Journals > Reverse Journals`, 
 
 **Caveat.** The synthetic smoke test can't exercise the pymupdf path; (b) is verified empirically via a measurement script over the 4 committed PDFs, not a unit test. Only `erp-general-ledger.pdf` of the 4 ERP source PDFs is committed locally; the other 3 were fetched at ingest time on the VPS.
 
-**Deferred — re-ingest (VPS deploy action, user-owned, has cost).** The dev-container `chunks.db`/Qdrant and the live VPS stores still hold the **old** chunks. Making this real requires a re-ingest on the VPS (re-chunk + **re-embed**, ~1.7M Voyage tokens again). Confirm the Voyage spend cap first (see the Phase 0 note). After re-ingest, re-run the count reconciliation and re-measure the token distribution; the Phase 1 table (ERP 4034 = 4034, total 7740) will change — chunk counts drop as slivers merge.
+**Re-ingest — done on the VPS (2026-05-31).** Voyage spend cap confirmed first. Cleared the old SQLite chunks, rebuilt the ingestion image, and re-ran fetch → chunk → embed → write with `--recreate` (fresh Qdrant collections). New reconciled counts (both stores `OK`):
+
+| Product | Old | New |
+|---|---|---|
+| erp | 4034 | 947 |
+| epm | 2181 | 873 |
+| oci | 1525 | 754 |
+| **total** | **7740** | **2574** |
+
+~3× fewer chunks; implied mean ~640 tok/chunk (was 213), squarely in the 400–800 band. Same source text and ~1.7M embedded tokens, just packed correctly — so embedding cost was unchanged, not cheaper. All 4 ERP PDFs (incl. the three not committed locally) chunked without anomaly. The Phase 1 count table above is annotated as superseded by these numbers.
 
 ---
