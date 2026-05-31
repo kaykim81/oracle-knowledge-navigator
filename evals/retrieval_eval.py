@@ -33,7 +33,7 @@ from shared import db, retrieval
 
 log = logging.getLogger("evals.retrieval")
 
-MODES = ["vector_only", "hybrid", "hybrid_rerank"]
+MODES = ["keyword_only", "vector_only", "hybrid", "hybrid_rerank"]
 TOP_K = 10
 KS = [1, 3, 5, 10]
 BARS = ["text", "section"]

@@ -25,9 +25,10 @@ from pydantic import BaseModel, ConfigDict, Field
 # Qdrant collection prefixes (erp_docs, epm_docs, oci_docs).
 Product = Literal["erp", "epm", "oci"]
 
-# Retrieval modes, matching shared.retrieval.retrieve() (Phase 2) and the three
-# columns of the eval scorecard (Phase 7).
-RetrievalMode = Literal["vector_only", "hybrid", "hybrid_rerank"]
+# Retrieval modes, matching shared.retrieval.retrieve() (Phase 2) and the eval
+# scorecard (Phase 7). keyword_only is a BM25 baseline for the ablation — not a
+# production mode (the demo serves hybrid_rerank).
+RetrievalMode = Literal["keyword_only", "vector_only", "hybrid", "hybrid_rerank"]
 
 # Fixed namespace so chunk IDs are deterministic: re-ingesting the same source
 # produces the same IDs, which makes the Qdrant/SQLite writes idempotent

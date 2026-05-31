@@ -130,6 +130,8 @@ async def retrieve(
     — used to confine an EPM query to one module (Planning / FCC / Narrative)
     that shares the collection, so a Planning question can't surface FCC chunks.
     """
+    if mode == "keyword_only":
+        return await _keyword_only(query, product, top_k, doc_ids)
     if mode == "vector_only":
         return await _vector_only(query, product, top_k, doc_ids)
     if mode == "hybrid":
@@ -137,6 +139,22 @@ async def retrieve(
     if mode == "hybrid_rerank":
         return await _hybrid_rerank(query, product, top_k, min_rerank_score, doc_ids)
     raise ValueError(f"unknown retrieval mode: {mode!r}")
+
+
+async def _keyword_only(
+    query: str, product: str, top_k: int, doc_ids: list[str] | None = None
+) -> list[SearchResult]:
+    """BM25 (FTS5) keyword search only — the lexical baseline for the ablation."""
+    t0 = time.perf_counter()
+    hits = await asyncio.to_thread(
+        db.search_bm25, _get_db(), query, product=product, doc_ids=doc_ids, limit=top_k
+    )
+    latency_ms = round((time.perf_counter() - t0) * 1000, 1)
+    return [
+        SearchResult(chunk=chunk, score=score, retrieval_mode="keyword_only",
+                     latency_ms=latency_ms)
+        for chunk, score in hits
+    ]
 
 
 async def _vector_only(
@@ -267,7 +285,7 @@ def main() -> None:
     ap.add_argument("--product", default="erp", help="erp | epm | oci")
     ap.add_argument(
         "--mode", default="hybrid_rerank",
-        choices=["vector_only", "hybrid", "hybrid_rerank"],
+        choices=["keyword_only", "vector_only", "hybrid", "hybrid_rerank"],
     )
     ap.add_argument("--top-k", type=int, default=5)
     ap.add_argument("--min-rerank-score", type=float, default=None,
