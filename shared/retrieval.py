@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import time
 
 from . import db, embeddings, qdrant_store
@@ -33,6 +34,26 @@ log = logging.getLogger(__name__)
 RRF_K = 60
 # How many hybrid candidates to send to the reranker before taking top_k.
 RERANK_CANDIDATES = 30
+
+# Relevance floor for hybrid_rerank: drop results scoring below this so a query
+# with no genuinely relevant chunk returns [] and the orchestrator abstains
+# ("say you don't know") instead of answering from general knowledge. Only the
+# Voyage rerank-2 score is calibrated relevance — vector cosine and RRF scores
+# are not — so the floor applies in hybrid_rerank only. Off-topic results were
+# observed at ~0.03; 0.1 is a conservative cut. PROVISIONAL: validate against
+# the retrieval eval (recall@k must not drop) and tune via the env var.
+MIN_RERANK_SCORE = float(os.getenv("RETRIEVAL_MIN_RERANK_SCORE", "0.1"))
+
+
+def _apply_score_floor(results: list[SearchResult], floor: float) -> list[SearchResult]:
+    """Drop results whose (calibrated rerank) score is below ``floor``.
+
+    ``floor <= 0`` disables filtering. An all-below-floor result set becomes
+    ``[]``, which the caller treats as "nothing relevant retrieved".
+    """
+    if floor <= 0:
+        return results
+    return [r for r in results if r.score >= floor]
 
 # Lazily-built, reusable clients (MCP servers call retrieve() repeatedly).
 # Tests inject in-memory instances via set_qdrant_client() / set_db_connection().
@@ -83,14 +104,20 @@ async def retrieve(
     product: str,
     mode: RetrievalMode,
     top_k: int = 10,
+    *,
+    min_rerank_score: float | None = None,
 ) -> list[SearchResult]:
-    """Retrieve the top_k chunks for a query within one product, by mode."""
+    """Retrieve the top_k chunks for a query within one product, by mode.
+
+    In ``hybrid_rerank``, results below the relevance floor are dropped (see
+    ``MIN_RERANK_SCORE``); ``min_rerank_score`` overrides that default.
+    """
     if mode == "vector_only":
         return await _vector_only(query, product, top_k)
     if mode == "hybrid":
         return await _hybrid(query, product, top_k)
     if mode == "hybrid_rerank":
-        return await _hybrid_rerank(query, product, top_k)
+        return await _hybrid_rerank(query, product, top_k, min_rerank_score)
     raise ValueError(f"unknown retrieval mode: {mode!r}")
 
 
@@ -135,8 +162,10 @@ async def _hybrid(query: str, product: str, top_k: int) -> list[SearchResult]:
     ]
 
 
-async def _hybrid_rerank(query: str, product: str, top_k: int) -> list[SearchResult]:
-    """Hybrid-retrieve candidates, then re-score with Voyage rerank-2."""
+async def _hybrid_rerank(
+    query: str, product: str, top_k: int, min_rerank_score: float | None = None
+) -> list[SearchResult]:
+    """Hybrid-retrieve candidates, re-score with Voyage rerank-2, drop sub-floor."""
     t0 = time.perf_counter()
     candidates = await _hybrid(query, product, RERANK_CANDIDATES)
     if not candidates:
@@ -146,12 +175,14 @@ async def _hybrid_rerank(query: str, product: str, top_k: int) -> list[SearchRes
     ranking = await asyncio.to_thread(embeddings.rerank, query, docs, top_k=top_k)
     rerank_latency_ms = round((time.perf_counter() - tr0) * 1000, 1)
     latency_ms = round((time.perf_counter() - t0) * 1000, 1)
-    return [
+    results = [
         SearchResult(chunk=candidates[idx].chunk, score=score,
                      retrieval_mode="hybrid_rerank",
                      latency_ms=latency_ms, rerank_latency_ms=rerank_latency_ms)
         for idx, score in ranking
     ]
+    floor = MIN_RERANK_SCORE if min_rerank_score is None else min_rerank_score
+    return _apply_score_floor(results, floor)
 
 
 # --------------------------------------------------------------------------- #
@@ -177,21 +208,48 @@ def _print_results(query: str, product: str, mode: str, results: list[SearchResu
         print(f"    {r.chunk.source_url}")
 
 
+class _Scored:
+    """Minimal stand-in with a .score, for the offline floor self-test."""
+
+    def __init__(self, score: float):
+        self.score = score
+
+
+def _selftest() -> None:
+    """Offline check of the score-floor logic (no Qdrant/Voyage needed)."""
+    res = [_Scored(0.5), _Scored(0.03), _Scored(0.2)]
+    assert [r.score for r in _apply_score_floor(res, 0.1)] == [0.5, 0.2], "floor kept wrong rows"
+    assert len(_apply_score_floor(res, 0.0)) == 3, "floor<=0 should disable filtering"
+    assert _apply_score_floor([_Scored(0.03)], 0.1) == [], "all-below-floor should be empty (-> abstain)"
+    print(f"OK: score floor (env default MIN_RERANK_SCORE={MIN_RERANK_SCORE})")
+    print("ALL RETRIEVAL SELF-TESTS PASSED")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Query the hybrid retrieval engine")
-    ap.add_argument("--query", required=True)
+    ap.add_argument("--query", help="question to retrieve for (omit with --selftest)")
     ap.add_argument("--product", default="erp", help="erp | epm | oci")
     ap.add_argument(
         "--mode", default="hybrid_rerank",
         choices=["vector_only", "hybrid", "hybrid_rerank"],
     )
     ap.add_argument("--top-k", type=int, default=5)
+    ap.add_argument("--min-rerank-score", type=float, default=None,
+                    help=f"relevance floor for hybrid_rerank (env default {MIN_RERANK_SCORE})")
+    ap.add_argument("--selftest", action="store_true", help="run offline floor self-test and exit")
     args = ap.parse_args()
+
+    if args.selftest:
+        _selftest()
+        return
+    if not args.query:
+        ap.error("--query is required (or pass --selftest)")
 
     # Keep dependency chatter out of the pretty output.
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
 
-    results = asyncio.run(retrieve(args.query, args.product, args.mode, top_k=args.top_k))
+    results = asyncio.run(retrieve(args.query, args.product, args.mode,
+                                   top_k=args.top_k, min_rerank_score=args.min_rerank_score))
     _print_results(args.query, args.product, args.mode, results)
 
 
