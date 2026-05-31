@@ -24,7 +24,11 @@ EVALS_URL = f"{REPO_URL}/tree/main/evals/results"
 REQUEST_TIMEOUT = 240
 
 # Each button draws a fresh question at random from its pool on every click
-# (see pick_sample). Cross-product questions exercise federation across servers.
+# (see pick_sample). Cross-product questions exercise federation across servers;
+# the "Tricky routing" pool is terminology lures — the surface keyword points at
+# one product but the answer lives in another, so it shows the router resisting
+# the obvious-but-wrong route (e.g. "allocate overhead in the general ledger" reads
+# like EPM's allocation rules but is ERP GL).
 SAMPLES = {
     "ERP — single product": [
         "How do I reverse a posted journal entry?",
@@ -52,6 +56,13 @@ SAMPLES = {
         "How do ERP General Ledger balances get loaded into EPM for consolidation?",
         "How are intercompany transactions handled across ERP and EPM?",
         "How does the period close coordinate between Fusion ERP and EPM?",
+    ],
+    "Tricky routing": [
+        "How do I reverse a consolidation journal?",                                 # 'journal' lures ERP -> EPM
+        "How do I allocate overhead costs across cost centers in the general ledger?",  # 'allocation' lures EPM -> ERP
+        "How do I translate balances to a parent currency as part of the close?",    # 'balances/translate' lures ERP GL -> EPM (close)
+        "How do I organize financial data into compartments to control access?",     # 'financial' lures ERP -> OCI
+        "How do I configure a security policy that controls which users can access resources?",  # -> OCI
     ],
 }
 
