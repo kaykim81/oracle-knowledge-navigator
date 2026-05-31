@@ -46,10 +46,16 @@ def _query(question: str, mode: str) -> dict:
 
 
 def _chunks_from_trace(trace: list[dict]) -> list[dict]:
-    """Flatten search_docs chunk metadata across the trace (metadata only)."""
+    """Flatten chunk metadata across the trace from any search tool.
+
+    Matches every ``search*`` tool — ERP/OCI use ``search_docs``; EPM uses the
+    per-module ``search_planning`` / ``search_fcc`` / ``search_narrative`` —
+    so EPM chunks aren't silently dropped. Carries full ``text`` (not just the
+    200-char UI snippet) so the judge scores groundedness on real evidence.
+    """
     chunks = []
     for step in trace:
-        if step.get("tool") == "search_docs" and isinstance(step.get("results"), list):
+        if step.get("tool", "").startswith("search") and isinstance(step.get("results"), list):
             for c in step["results"]:
                 if isinstance(c, dict) and "snippet" in c:
                     chunks.append({
@@ -57,6 +63,7 @@ def _chunks_from_trace(trace: list[dict]) -> list[dict]:
                         "source_url": c.get("source_url", ""),
                         "score": c.get("score"),
                         "snippet": c.get("snippet", ""),
+                        "text": c.get("text", c.get("snippet", "")),
                     })
     return chunks
 
@@ -70,9 +77,9 @@ def _category(q: dict) -> str:
 
 
 def _recall_hit(chunks: list[dict], keywords: list[str]) -> bool:
-    """True if any retrieved chunk (section path + snippet) contains a keyword."""
+    """True if any retrieved chunk (section path + full text) contains a keyword."""
     hay = " ".join(
-        " ".join(c.get("section_path") or []) + " " + (c.get("snippet") or "")
+        " ".join(c.get("section_path") or []) + " " + (c.get("text") or c.get("snippet") or "")
         for c in chunks
     ).lower()
     return any(k.lower() in hay for k in keywords)

@@ -117,11 +117,13 @@ def _summarize_result(payload: str):
         for item in data[:8]:
             if isinstance(item, dict) and "chunk" in item:
                 chunk = item["chunk"]
+                full_text = " ".join((chunk.get("text") or "").split())
                 out.append({
                     "score": round(item.get("score", 0.0), 3),
                     "section_path": chunk.get("section_path", []),
                     "source_url": chunk.get("source_url", ""),
-                    "snippet": " ".join((chunk.get("text") or "").split())[:200],
+                    "snippet": full_text[:200],   # short — for the UI trace caption
+                    "text": full_text,            # full — so the eval judge sees real grounding
                 })
             else:
                 out.append(item)  # e.g. list_topics -> list[str]

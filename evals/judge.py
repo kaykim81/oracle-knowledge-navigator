@@ -35,8 +35,12 @@ _ZERO = {"correctness": 0, "groundedness": 0, "citation_quality": 0, "rationale"
 
 
 def _prompt(row: dict) -> str:
+    # Judge groundedness against the FULL chunk text the model actually saw, not
+    # the 200-char UI snippet — otherwise larger chunks look ungrounded because
+    # the supporting sentence sits past the truncation.
     chunks = "\n".join(
-        f"- [{c.get('score')}] {' > '.join(c.get('section_path') or [])}: {c.get('snippet', '')}"
+        f"- [{c.get('score')}] {' > '.join(c.get('section_path') or [])}: "
+        f"{c.get('text') or c.get('snippet', '')}"
         for c in (row.get("retrieved_chunks") or [])[:8]
     ) or "(no chunks retrieved)"
     return (
