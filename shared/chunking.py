@@ -38,6 +38,10 @@ from .models import Chunk, Product
 MIN_TOKENS = 400
 MAX_TOKENS = 800
 
+# A PDF heading is short. Larger-than-body text longer than this is emphasized
+# body (a bold lead-in, a table cell), not a section title.
+_MAX_HEADING_WORDS = 12
+
 # Tags whose text we treat as body content (as opposed to section headings).
 _CONTENT_TAGS = {"p", "li", "pre", "blockquote", "h4", "h5", "h6"}
 _HEADING_TAGS = {"h1", "h2", "h3"}
@@ -134,11 +138,15 @@ def _blocks_from_pdf(path: str) -> list[Block]:
         if not mass:
             return []
         body = mass.most_common(1)[0][0]
-        heading_sizes = sorted(
+        candidates = sorted(
             (s for s in mass if s > body + 0.9 and len(pages_per_size[s]) >= 2),
             reverse=True,
         )
-        level_map = {s: min(i + 1, 3) for i, s in enumerate(heading_sizes)}
+        # Only the largest few sizes are real structural headings; smaller
+        # "larger than body" sizes (bold labels, table headers, captions) would
+        # otherwise all collapse onto level 3 and fire a heading at every switch.
+        heading_sizes = candidates[:3]
+        level_map = {s: i + 1 for i, s in enumerate(heading_sizes)}
 
         blocks: list[Block] = []
         stack: list[tuple[int, str]] = []
@@ -157,7 +165,12 @@ def _blocks_from_pdf(path: str) -> list[Block]:
                     continue
                 size = round(max((sp["size"] for sp in spans), default=body), 1)
                 level = level_map.get(size)
-                if level and len(text) >= 3 and not text.isdigit():
+                if (
+                    level
+                    and len(text) >= 3
+                    and len(text.split()) <= _MAX_HEADING_WORDS
+                    and not text.isdigit()
+                ):
                     _update_stack(stack, level, text)
                 else:
                     blocks.append(Block(tuple(t for _, t in stack), text))
@@ -229,6 +242,26 @@ def _split_oversized(text: str, max_tokens: int) -> list[str]:
     return pieces
 
 
+def _common_prefix(paths: list[tuple[str, ...]]) -> tuple[str, ...]:
+    """Longest heading path shared by every block merged into one chunk.
+
+    When a chunk packs several small sibling subsections, it is labelled with
+    the parent they share; one that spans unrelated top-level sections degrades
+    to the document root (empty path), which is the honest label.
+    """
+    if not paths:
+        return ()
+    prefix = paths[0]
+    for p in paths[1:]:
+        i = 0
+        while i < len(prefix) and i < len(p) and prefix[i] == p[i]:
+            i += 1
+        prefix = prefix[:i]
+        if not prefix:
+            break
+    return prefix
+
+
 def chunk_blocks(
     blocks: list[Block],
     *,
@@ -238,21 +271,25 @@ def chunk_blocks(
     min_tokens: int = MIN_TOKENS,
     max_tokens: int = MAX_TOKENS,
 ) -> list[Chunk]:
-    """Pack blocks into chunks, never crossing a heading-path boundary.
+    """Pack blocks into chunks targeting ``min_tokens``..``max_tokens``.
 
-    ``min_tokens`` is a soft target (packing fills toward ``max_tokens``, so a
-    section's trailing chunk may be smaller); ``max_tokens`` is a hard ceiling.
+    Packing fills a chunk toward ``max_tokens`` (a hard ceiling). A heading
+    boundary only ends a chunk once it has reached ``min_tokens`` — so a run of
+    tiny sections (common in heavily-structured PDFs) merges forward into one
+    right-sized chunk instead of emitting a sliver per heading. A merged chunk's
+    ``section_path`` is the longest heading path its blocks share. A section's
+    trailing chunk may still fall below ``min_tokens``.
     """
     chunks: list[Chunk] = []
-    path: tuple[str, ...] = ()
     buf: list[str] = []
+    buf_paths: list[tuple[str, ...]] = []
     buf_tok = 0
     idx = 0
     # Paragraphs are joined with "\n\n"; count that separator against the budget
     # so packing many tiny paragraphs doesn't overflow max_tokens.
     join_overhead = len(_enc().encode("\n\n"))
 
-    def emit(text: str) -> None:
+    def emit(text: str, section_path: tuple[str, ...]) -> None:
         nonlocal idx
         text = text.strip()
         if text:
@@ -263,36 +300,38 @@ def chunk_blocks(
                     chunk_index=idx,
                     text=text,
                     source_url=source_url,
-                    section_path=list(path),
+                    section_path=list(section_path),
                 )
             )
             idx += 1
 
     def flush() -> None:
-        nonlocal buf, buf_tok
+        nonlocal buf, buf_paths, buf_tok
         if buf:
-            emit("\n\n".join(buf))
-        buf, buf_tok = [], 0
+            emit("\n\n".join(buf), _common_prefix(buf_paths))
+        buf, buf_paths, buf_tok = [], [], 0
 
     for block in blocks:
         text = block.text.strip()
         if not text:
             continue
-        if block.section_path != path:
-            flush()
-            path = block.section_path
         ptok = num_tokens(text)
+        # A single block over the ceiling can't be packed; split it on its own.
         if ptok > max_tokens:
             flush()
             for piece in _split_oversized(text, max_tokens):
-                emit(piece)
+                emit(piece, block.section_path)
             continue
-        added = ptok + (join_overhead if buf else 0)
-        if buf and buf_tok + added > max_tokens:
-            flush()
-            added = ptok  # buffer now empty: no separator
+        if buf:
+            crosses = block.section_path != buf_paths[-1]
+            overflows = buf_tok + join_overhead + ptok > max_tokens
+            # End the chunk on overflow, or at a heading boundary once it is
+            # already big enough; otherwise keep packing across the boundary.
+            if overflows or (crosses and buf_tok >= min_tokens):
+                flush()
+        buf_tok += ptok + (join_overhead if buf else 0)
         buf.append(text)
-        buf_tok += added
+        buf_paths.append(block.section_path)
     flush()
     return chunks
 
@@ -351,7 +390,11 @@ def _smoke_test() -> None:
       <ul><li>Create the original journal.</li><li>Schedule the reversal.</li></ul>
     </body></html>
     """
-    hchunks = chunk_html(html, product="erp", doc_id="erp-gl", source_url="https://x/gl")
+    # min_tokens=1 keeps one chunk per heading section, so we can assert the
+    # heading hierarchy independently of the size-based packing tested below.
+    hchunks = chunk_html(
+        html, product="erp", doc_id="erp-gl", source_url="https://x/gl", min_tokens=1
+    )
     paths = [c.section_path for c in hchunks]
     print(f"HTML -> {len(hchunks)} chunks")
     for c in hchunks:
@@ -367,6 +410,24 @@ def _smoke_test() -> None:
     assert all(c.id == Chunk.make_id("erp-gl", c.chunk_index) for c in hchunks)
     print("OK: HTML section paths, packing, sequential deterministic ids")
 
+    # --- min-token floor: tiny sibling sections merge forward ---------------
+    many = "# Guide\n\n" + "".join(
+        f"## Section {i}\n\nBody text for section {i} with several words to count toward the budget.\n\n"
+        for i in range(120)
+    )
+    mchunks = chunk_text(many, product="erp", doc_id="erp-guide", source_url="https://x/g")
+    mtok = [num_tokens(c.text) for c in mchunks]
+    print(f"FLOOR -> 120 tiny sections -> {len(mchunks)} chunks, tokens={mtok}")
+    assert len(mchunks) < 10, "tiny sections should merge, not emit one chunk each"
+    assert all(t <= MAX_TOKENS for t in mtok), "a chunk exceeded max_tokens"
+    # Every chunk but the trailing one clears the floor. Packing sums per-block
+    # token counts (tiktoken is not additive across joins), so the true joined
+    # count lands a few percent under the budget — allow a small tolerance.
+    assert all(t >= MIN_TOKENS - 50 for t in mtok[:-1]), "a non-trailing chunk fell well below min_tokens"
+    # merged siblings are labelled with the parent path they share
+    assert all(c.section_path == ["Guide"] for c in mchunks), "merged path should be common prefix"
+    print("OK: min-token floor merges tiny sections, common-prefix path")
+
     # --- plain text, Markdown headings --------------------------------------
     text = (
         "# Oracle Cloud Infrastructure\n\n"
@@ -376,7 +437,9 @@ def _smoke_test() -> None:
         "### Shapes\n\n"
         "A shape defines the CPU and memory resources of an instance.\n"
     )
-    tchunks = chunk_text(text, product="oci", doc_id="oci-compute", source_url="https://x/oci")
+    tchunks = chunk_text(
+        text, product="oci", doc_id="oci-compute", source_url="https://x/oci", min_tokens=1
+    )
     tpaths = [c.section_path for c in tchunks]
     print(f"TEXT -> {len(tchunks)} chunks")
     assert ["Oracle Cloud Infrastructure"] in tpaths

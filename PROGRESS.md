@@ -275,3 +275,31 @@ Small demo-quality tweaks after the feature work, on top of the streaming + cost
 These are in the UI image — rebuild on the VPS (`docker compose up -d --build ui`) to see the sample/link changes live.
 
 ---
+
+## Chunking quality fix (2026-05-31)
+
+**What prompted it.** Reconciling the Phase 1 counts: 7740 chunks vs. ~1.7M embedded Voyage tokens is only **~213 tokens/chunk** — far below the stated 400–800 target. Measuring the live `chunks.db` (same tiktoken `cl100k_base` counter, so the gap is real, not tokenizer drift): mean 213, **median 137**, 84% of chunks under 400, one chunk of 1 token. ERP (PDF) was worst at mean **161**.
+
+**Two root causes (both in `shared/chunking.py`):**
+1. **No real floor + no cross-heading packing.** `chunk_blocks` flushed on every `section_path` change, so chunk granularity *was* section granularity — 93% of (doc, section) groups produced exactly one chunk, however tiny. `min_tokens` was accepted as a parameter and described in the docstring but **never referenced in the packing body** — dead code.
+2. **PDF heading over-detection.** `_blocks_from_pdf` treated *every* font size `> body+0.9` (on ≥2 pages) as a heading, mapping all sizes beyond the 3rd onto level 3. Oracle Fusion guides use many larger/bold sizes (table headers, run-in labels, captions) → **~866 distinct heading paths/doc** for ERP, each forcing a flush into a sliver.
+
+**Fix.**
+- **(a) Min-token floor.** Packing now fills across heading boundaries, ending a chunk at a boundary only once it has reached `min_tokens` (hard ceiling `max_tokens` unchanged). Merged chunks are labelled with the **longest shared heading path** (new `_common_prefix` helper). `min_tokens` is now functional.
+- **(b) Tighter PDF headings.** Only the **top-3 sizes above body** are headings (was: all larger sizes → level 3); a heading must also be **≤12 words** (`_MAX_HEADING_WORDS`), filtering emphasized body / table cells.
+
+**Verified locally (offline — chunking costs nothing; only re-embedding costs Voyage).** Smoke test (`python -m shared.chunking`) extended with a floor/merge case, all pass. Measured against the real PDFs present in the repo (1 ERP + 3 EPM):
+
+| Metric (ERP general-ledger PDF) | Before | After |
+|---|---|---|
+| Mean tokens/chunk | 161 | 729 |
+| % chunks under 400 | ~84% | 0% |
+| Distinct heading paths/doc | ~866 | 70 |
+
+Post-fix `section_path`s read like a real TOC (`2 Journals > Reverse Journals`, `3 Allocations and Periodic Entries > Recurring Journals`). Note: tiktoken is **not additive across joins**, so packing (which sums per-block counts) lands chunks a few % under the budget — the smoke test allows a 50-token tolerance on the floor.
+
+**Caveat.** The synthetic smoke test can't exercise the pymupdf path; (b) is verified empirically via a measurement script over the 4 committed PDFs, not a unit test. Only `erp-general-ledger.pdf` of the 4 ERP source PDFs is committed locally; the other 3 were fetched at ingest time on the VPS.
+
+**Deferred — re-ingest (VPS deploy action, user-owned, has cost).** The dev-container `chunks.db`/Qdrant and the live VPS stores still hold the **old** chunks. Making this real requires a re-ingest on the VPS (re-chunk + **re-embed**, ~1.7M Voyage tokens again). Confirm the Voyage spend cap first (see the Phase 0 note). After re-ingest, re-run the count reconciliation and re-measure the token distribution; the Phase 1 table (ERP 4034 = 4034, total 7740) will change — chunk counts drop as slivers merge.
+
+---
