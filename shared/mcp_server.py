@@ -30,8 +30,17 @@ def build_server(
     search_description: str,
     get_document_description: str,
     list_topics_description: str,
+    module_searches: list[dict] | None = None,
 ) -> FastMCP:
-    """Build a product-scoped MCP server with the three standard tools."""
+    """Build a product-scoped MCP server with the three standard tools.
+
+    ``module_searches`` (used by EPM, whose one collection holds three distinct
+    module guides) registers one ``search`` tool per module instead of the
+    single ``search_docs`` — each scoped to its ``doc_ids`` so routing to a
+    module's tool can't surface another module's chunks. Each entry is
+    ``{"name", "doc_ids", "description"}``. When ``None`` (ERP/OCI), the single
+    product-wide ``search_docs`` is registered.
+    """
     mcp = FastMCP(name, instructions=instructions, host="0.0.0.0", port=port)
     state: dict = {"conn": None}
 
@@ -41,10 +50,19 @@ def build_server(
             retrieval.set_db_connection(state["conn"])
         return state["conn"]
 
-    @mcp.tool(description=search_description)
-    async def search_docs(query: str, top_k: int = 5, mode: str = "hybrid_rerank") -> list[dict]:
-        results = await retrieval.retrieve(query, product, mode, top_k=top_k)
-        return [r.model_dump(mode="json") for r in results]
+    def _make_search(doc_ids: list[str] | None):
+        async def search(query: str, top_k: int = 5, mode: str = "hybrid_rerank") -> list[dict]:
+            results = await retrieval.retrieve(
+                query, product, mode, top_k=top_k, doc_ids=doc_ids
+            )
+            return [r.model_dump(mode="json") for r in results]
+        return search
+
+    if module_searches:
+        for m in module_searches:
+            mcp.add_tool(_make_search(m["doc_ids"]), name=m["name"], description=m["description"])
+    else:
+        mcp.add_tool(_make_search(None), name="search_docs", description=search_description)
 
     @mcp.tool(description=get_document_description)
     async def get_document(doc_id: str) -> dict | None:
