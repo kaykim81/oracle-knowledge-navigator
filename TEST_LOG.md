@@ -164,7 +164,7 @@ Strict (keyword in section path):
 
 **Mode value is input-dependent — each mode wins in the regime it was designed for**, and the aggregate (dominated by 30 easy single-product questions where vector already saturates) masks it:
 
-- **Adversarial questions → rerank wins decisively: recall@1 doubles, 40% → 80%.** When terminology is misleading (e.g. "reverse a *consolidation* journal" lures ERP but the answer is EPM), rerank's semantic precision surfaces the right section. This is exactly what a reranker is for.
+- **Adversarial questions → rerank wins, recall@1 40% → 80%.** When terminology is misleading (e.g. "reverse a *consolidation* journal" lures ERP but the answer is EPM), rerank's semantic precision surfaces the right section. This is exactly what a reranker is for. **[Superseded 2026-05-31 — small-sample artifact. n was only 5 here. After rebalancing adversarial to n=15, rerank's edge shrank to recall@1 53% vs 40% (MRR 0.585 vs 0.539) — a modest advantage, not a doubling. See "Dataset rebalance + refreshed scorecard" at the end.]**
 - **Cross-product questions → hybrid wins** (MRR 0.757 > vector 0.714): the BM25 keyword leg catches the specific cross-domain sections; rerank over-reorders on the mixed-domain query and dips.
 - **Easy single-product → vector ≈ rerank > hybrid**: voyage-3-large already retrieves the right section first ~87% of the time; hybrid's keyword candidates add RRF noise; rerank cleans it back to vector's level.
 
@@ -211,7 +211,7 @@ End-to-end p50 ~28–33s, p95 76–157s — the demo's real weakness, dominated 
 
 ### Interview talking points
 
-- **Lead with the per-category result, not the aggregate.** "On the *adversarial* questions, reranking doubled retrieval top-1 precision (40% → 80%). On *cross-product*, the BM25 hybrid leg won on recall. On *easy* questions, vector already saturates and the extras add noise. The aggregate hides this because it's dominated by easy questions — so I broke it down by query type."
+- **Lead with the per-category result, not the aggregate — and with the sample-size correction.** "On *adversarial* questions, an n=5 pilot showed reranking *doubling* top-1 precision (40%→80%) — but I distrusted n=5, expanded adversarial to 15, and the gap regressed to a *modest* edge (53% vs 40%). On *cross-product*, vector actually beats rerank. On *easy* questions, vector already saturates. So the honest takeaway is that pure vector is the strongest mode on this corpus and rerank's wins are smaller than the pilot suggested — which I'd never have caught without rebalancing the dataset." (This *is* the strong story: a self-corrected finding beats an impressive-but-fragile one.)
 - **The routing-robustness finding *and the fix*.** "I measured routing accuracy: 100% on normal single- and cross-product questions, but 20% on adversarial terminology lures — the agent follows the misleading word to the wrong product. The retrieval is fine *given correct routing*, so the fix was in the router, not the retrieval: I sharpened the tool/scope descriptions to encode the real Oracle product boundaries — that took adversarial routing from 20% to 100%, with retrieval metrics unchanged (the scope edits only affect what the router reads, not `retrieve()`)." This is the strongest single story — **measured a failure mode, diagnosed it precisely, fixed it with context engineering, re-measured, and the fix was provably isolated to the layer it should touch.** And the honesty note: I encoded durable product-boundary facts, not question→answer mappings, so it generalizes rather than overfits the 5 eval questions.
 - **rerank > hybrid on answer quality in every category**, even though pure vector is a strong baseline on this corpus — reranking is what makes the hybrid candidate set pay off.
 - "The honest answer is *it depends on the corpus and query distribution*. I built the full hybrid + rerank pipeline **and** a rigorous eval that tells me exactly when each mode earns its keep."
@@ -270,3 +270,26 @@ The EPM cross-module bleed (a Planning question synthesizing FCC content) is fix
 | "post a **consolidation journal** during the close" | `epm_search_fcc` ×4 | FCC guide (Ch. 19) | correctly FCC-grounded |
 
 **The progression that makes the talking point:** same Planning question, three attempts — (1) no fix → confident FCC answer; (2) prompt-only → still blended FCC ("well-cited-but-wrong"); (3) module-scoped tools → `search_planning` only, FCC structurally impossible. **A structural fix beat soft prompt guidance** — the layer the fix lives in matters more than how strongly you word the instruction. And the fix turned a *masked* failure (FCC-as-Planning) into an *honest* one (the answer now says which content isn't in its sources and where to look).
+
+## Dataset rebalance + refreshed retrieval scorecard (2026-05-31)
+
+The original 30/10/5 split over-weighted easy single-product questions (which saturate) and under-sampled the discriminating categories — adversarial carried its headline finding on **n=5**. Rebalanced to **15/15/15** (commit `a0012e3`): single trimmed to 5/product; cross +5 (erp↔epm); adversarial +10 lures across all three target products, including *inverted* lures (e.g. "allocate overhead *in the general ledger*" → ERP, mirroring the existing "allocation in Planning" → EPM) so the router can't memorize a keyword→product shortcut. Every new question's keywords verified present in the target corpus. Scorecard `20260531T152430Z_retrieval`.
+
+**Refreshed retrieval scorecard — strict section bar, recall@1 / MRR (the n=5 → n=15 correction):**
+
+| category (n) | vector_only | hybrid | hybrid_rerank |
+|---|---|---|---|
+| single (15) | 67% / 0.744 | 60% / 0.706 | 67% / **0.747** |
+| cross (30) | **43% / 0.569** | 27% / 0.475 | 33% / 0.449 |
+| adversarial (15) | 40% / 0.539 | 33% / 0.506 | **53% / 0.585** |
+| **overall (60)** | **48% / 0.605** | 37% / 0.541 | 47% / 0.558 |
+
+(TEXT/lenient bar still saturates: ~98% all modes.)
+
+**What changed vs the n=5 story:**
+- **The "rerank doubles adversarial recall@1 (40→80%)" finding did not survive.** At n=15 it's recall@1 **53% vs 40%**, MRR **0.585 vs 0.539** — rerank is still the best mode on adversarial, but the advantage is *modest*, not a doubling. The n=5 80% was a lucky sample.
+- **Cross-product: vector_only beats rerank — now robust at n=30** (MRR 0.569 vs 0.449; recall@1 43% vs 33%). This finding *strengthened*.
+- **Single: tie** (vector ≈ rerank, both ~0.745).
+- **Overall, `vector_only` is the strongest mode on this corpus** (MRR 0.605) — it wins cross, ties single, trails only modestly on adversarial.
+
+**Honest refreshed takeaway:** on this clean, well-embedded corpus with these query types, **pure `vector_only` is the strongest retrieval mode**; hybrid's RRF leg adds noise on most categories, and reranking earns a *modest* edge only on adversarial terminology lures while *hurting* cross-product. The earlier "rerank decisively wins adversarial" was a small-sample overstatement — caught precisely by expanding the thin category. (Caveat: `retrieval_eval` forces correct product, so this is retrieval precision *given* routing; the end-to-end routing-robustness re-run on the new lures is still deferred behind the spend cap.)
