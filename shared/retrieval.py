@@ -106,27 +106,34 @@ async def retrieve(
     top_k: int = 10,
     *,
     min_rerank_score: float | None = None,
+    doc_ids: list[str] | None = None,
 ) -> list[SearchResult]:
     """Retrieve the top_k chunks for a query within one product, by mode.
 
     In ``hybrid_rerank``, results below the relevance floor are dropped (see
     ``MIN_RERANK_SCORE``); ``min_rerank_score`` overrides that default.
+
+    ``doc_ids`` scopes retrieval to specific source documents within the product
+    — used to confine an EPM query to one module (Planning / FCC / Narrative)
+    that shares the collection, so a Planning question can't surface FCC chunks.
     """
     if mode == "vector_only":
-        return await _vector_only(query, product, top_k)
+        return await _vector_only(query, product, top_k, doc_ids)
     if mode == "hybrid":
-        return await _hybrid(query, product, top_k)
+        return await _hybrid(query, product, top_k, doc_ids)
     if mode == "hybrid_rerank":
-        return await _hybrid_rerank(query, product, top_k, min_rerank_score)
+        return await _hybrid_rerank(query, product, top_k, min_rerank_score, doc_ids)
     raise ValueError(f"unknown retrieval mode: {mode!r}")
 
 
-async def _vector_only(query: str, product: str, top_k: int) -> list[SearchResult]:
+async def _vector_only(
+    query: str, product: str, top_k: int, doc_ids: list[str] | None = None
+) -> list[SearchResult]:
     """Embed the query, search the product's Qdrant collection, return top_k."""
     t0 = time.perf_counter()
     vector = await asyncio.to_thread(embeddings.embed_query, query)
     hits = await asyncio.to_thread(
-        qdrant_store.search, _get_qdrant(), product, vector, limit=top_k
+        qdrant_store.search, _get_qdrant(), product, vector, limit=top_k, doc_ids=doc_ids
     )
     latency_ms = round((time.perf_counter() - t0) * 1000, 1)
     return [
@@ -136,7 +143,9 @@ async def _vector_only(query: str, product: str, top_k: int) -> list[SearchResul
     ]
 
 
-async def _hybrid(query: str, product: str, top_k: int) -> list[SearchResult]:
+async def _hybrid(
+    query: str, product: str, top_k: int, doc_ids: list[str] | None = None
+) -> list[SearchResult]:
     """Run vector + BM25 in parallel, fuse with RRF, return top_k."""
     t0 = time.perf_counter()
     pool = max(top_k, 30)  # candidate depth fetched from each ranker before fusion
@@ -144,12 +153,12 @@ async def _hybrid(query: str, product: str, top_k: int) -> list[SearchResult]:
     async def vector_leg():
         vector = await asyncio.to_thread(embeddings.embed_query, query)
         return await asyncio.to_thread(
-            qdrant_store.search, _get_qdrant(), product, vector, limit=pool
+            qdrant_store.search, _get_qdrant(), product, vector, limit=pool, doc_ids=doc_ids
         )
 
     async def bm25_leg():
         return await asyncio.to_thread(
-            db.search_bm25, _get_db(), query, product=product, limit=pool
+            db.search_bm25, _get_db(), query, product=product, doc_ids=doc_ids, limit=pool
         )
 
     vector_hits, bm25_hits = await asyncio.gather(vector_leg(), bm25_leg())
@@ -163,11 +172,12 @@ async def _hybrid(query: str, product: str, top_k: int) -> list[SearchResult]:
 
 
 async def _hybrid_rerank(
-    query: str, product: str, top_k: int, min_rerank_score: float | None = None
+    query: str, product: str, top_k: int, min_rerank_score: float | None = None,
+    doc_ids: list[str] | None = None,
 ) -> list[SearchResult]:
     """Hybrid-retrieve candidates, re-score with Voyage rerank-2, drop sub-floor."""
     t0 = time.perf_counter()
-    candidates = await _hybrid(query, product, RERANK_CANDIDATES)
+    candidates = await _hybrid(query, product, RERANK_CANDIDATES, doc_ids)
     if not candidates:
         return []
     docs = [c.chunk.text for c in candidates]

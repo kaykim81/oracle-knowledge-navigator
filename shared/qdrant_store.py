@@ -111,13 +111,24 @@ def search(
     query_vector: list[float],
     *,
     limit: int = 10,
+    doc_ids: list[str] | None = None,
 ) -> list[tuple[Chunk, float]]:
-    """Vector search within one product's collection. Higher score = better (cosine)."""
+    """Vector search within one product's collection. Higher score = better (cosine).
+
+    ``doc_ids`` restricts the search to those source documents — used to scope an
+    EPM query to a single module (e.g. Planning vs FCC) that shares the collection.
+    """
+    query_filter = None
+    if doc_ids:
+        query_filter = models.Filter(
+            must=[models.FieldCondition(key="doc_id", match=models.MatchAny(any=list(doc_ids)))]
+        )
     resp = client.query_points(
         collection_name=collection_for(product),
         query=query_vector,
         limit=limit,
         with_payload=True,
+        query_filter=query_filter,
     )
     return [(_chunk_from_payload(p.payload), p.score) for p in resp.points]
 
@@ -172,6 +183,16 @@ def _smoke_test() -> None:
     erp_doc_ids = {c.doc_id for c, _ in search(client, "erp", _vec(0), limit=10)}
     assert "oci-compute" not in erp_doc_ids
     print("OK: per-collection isolation holds")
+
+    # doc_ids filter: restrict an in-collection search to specific source docs
+    Chunk2 = Chunk.create(product="erp", doc_id="erp-ap", chunk_index=0,
+                          text="payables invoice", source_url="https://x/ap")
+    upsert_chunks(client, [Chunk2], [_vec(0)])
+    filtered = search(client, "erp", _vec(0), limit=10, doc_ids=["erp-ap"])
+    assert {c.doc_id for c, _ in filtered} == {"erp-ap"}, "doc_ids filter leaked other docs"
+    unfiltered = {c.doc_id for c, _ in search(client, "erp", _vec(0), limit=10)}
+    assert {"erp-gl", "erp-ap"} <= unfiltered, "unfiltered search should see both docs"
+    print("OK: doc_ids filter scopes to the requested source docs")
 
     # idempotent upsert: same ids -> no duplication
     upsert_chunks(client, chunks, vectors)

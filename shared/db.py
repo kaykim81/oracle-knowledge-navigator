@@ -164,12 +164,16 @@ def search_bm25(
     query: str,
     *,
     product: Product | None = None,
+    doc_ids: list[str] | None = None,
     limit: int = 10,
 ) -> list[tuple[Chunk, float]]:
     """BM25 keyword search. Returns (chunk, score) with higher score = better.
 
     (FTS5's bm25() is lower-is-better, so we negate it for consistency with the
     cosine scores from the vector store.)
+
+    ``doc_ids`` restricts results to those source documents — used to scope an
+    EPM query to a single module (e.g. Planning vs FCC) that shares the product.
     """
     match = _fts_query(query)
     if not match:
@@ -183,6 +187,9 @@ def search_bm25(
     if product is not None:
         sql += " AND c.product = ?"
         params.append(product)
+    if doc_ids:
+        sql += f" AND c.doc_id IN ({','.join('?' * len(doc_ids))})"
+        params.extend(doc_ids)
     sql += " ORDER BY bm25 LIMIT ?"
     params.append(limit)
     return [(_row_to_chunk(row), -row["bm25"]) for row in conn.execute(sql, params)]
@@ -271,6 +278,13 @@ def _smoke_test() -> None:
     oci_hits = search_bm25(conn, "instance shape", product="oci")
     assert not erp_hits and len(oci_hits) == 1
     print("OK: product filter isolates collections")
+
+    # doc_ids filter: scope within a product to specific source documents
+    gl_only = search_bm25(conn, "journal supplier", product="erp", doc_ids=["erp-gl"])
+    assert gl_only and all(c.doc_id == "erp-gl" for c, _ in gl_only)
+    none_match = search_bm25(conn, "journal supplier", product="erp", doc_ids=["erp-nope"])
+    assert none_match == [], "doc_ids filter should exclude non-matching docs"
+    print("OK: doc_ids filter scopes within a product")
 
     # the plan's definition-of-done query shape works
     rows = list(conn.execute(
