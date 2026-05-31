@@ -350,3 +350,28 @@ The query set was semantic-biased, so the ablation under-tested the lexical regi
 **A clean negative result.** BM25's textbook advantage on exact terms **did not appear** — `keyword_only` exactly *ties* `vector_only` (both 0.867). voyage-3-large embeds even rare exact tokens well enough to keep pace, so the lexical leg adds no edge on this corpus. `hybrid` (RRF) is *slightly worse* even here (0.825) — fusion dilution in every regime. The tuned `hybrid_rerank` wins the slice outright (1.000): the complementarity surfaces through *reranking the candidate pool*, not RRF fusion.
 
 **Cross-regime conclusion:** `vector_only` ≈ tuned `hybrid_rerank` are strongest across semantic, adversarial, *and* exact-term queries; naive `hybrid` underperforms everywhere; `keyword_only` is weakest except on exact-term, where it only ties. **Interview point:** I hypothesised exact-term queries would expose a BM25 edge and justify hybrid; I tested it and got a null — a strong modern embedder erases the classic lexical advantage on this corpus. Honest negative results are part of a credible eval. (n=5 — directional.)
+
+### Exact-term, n=15 — BM25's edge appears, and the all-regime verdict (2026-05-31)
+
+Promoted `exact_term` to a full category (15 questions; dataset now 60 = 15/15/15/15) and re-ran. The earlier **n=5** exact-term slice showed `keyword_only` *tying* `vector_only` (a null). At **n=15** that reverses — the BM25 edge appears (scorecard `20260531T214502Z`, TEXT bar):
+
+| mode | recall@1 | MRR |
+|---|---|---|
+| hybrid_rerank | 100% | 1.000 |
+| keyword_only | 93% | 0.956 |
+| hybrid | 93% | 0.942 |
+| vector_only | 87% | 0.906 |
+
+**`keyword_only` (0.956) now beats `vector_only` (0.906) on exact-term**, as does `hybrid` (0.942) — vector is the *worst* first-stage mode here, missing exact tokens BM25 nails. The n=5 tie was small-sample noise; the lexical-complementarity signal is real on a credible sample. **Supersedes the "clean null" recorded just above.**
+
+**Methodological symmetry (the interview point):** n=5 *overstated* rerank on adversarial (doubling → modest) **and** *understated* keyword on exact-term (tie → win). Both directions show n=5 is unreliable — which is exactly why the 15-per-category rebalance mattered.
+
+**All-regime verdict — no single first-stage mode dominates:**
+
+| regime | best first-stage | worst |
+|---|---|---|
+| semantic (single/cross) | vector | keyword |
+| exact-term (lexical) | keyword | vector |
+| adversarial | (rerank) | keyword |
+
+`hybrid_rerank` is the **only mode that wins or ties every regime** (best on adversarial 0.617 and exact-term 1.000; ~ties vector on single 0.747; competitive on cross 0.515). That is the empirical justification for shipping it: when the query distribution is unknown, the reranker is the robust choice — vector covers semantic, keyword covers lexical, rerank covers both.
