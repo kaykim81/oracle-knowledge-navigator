@@ -292,4 +292,25 @@ The original 30/10/5 split over-weighted easy single-product questions (which sa
 - **Single: tie** (vector ≈ rerank, both ~0.745).
 - **Overall, `vector_only` is the strongest mode on this corpus** (MRR 0.605) — it wins cross, ties single, trails only modestly on adversarial.
 
-**Honest refreshed takeaway:** on this clean, well-embedded corpus with these query types, **pure `vector_only` is the strongest retrieval mode**; hybrid's RRF leg adds noise on most categories, and reranking earns a *modest* edge only on adversarial terminology lures while *hurting* cross-product. The earlier "rerank decisively wins adversarial" was a small-sample overstatement — caught precisely by expanding the thin category. (Caveat: `retrieval_eval` forces correct product, so this is retrieval precision *given* routing; the end-to-end routing-robustness re-run on the new lures is still deferred behind the spend cap.)
+**Honest refreshed takeaway:** on this clean, well-embedded corpus with these query types, **`vector_only` was the strongest retrieval mode** *as configured*; hybrid's RRF leg adds noise, and the **untuned** reranker earned only a modest edge on adversarial while hurting cross-product. The earlier "rerank decisively wins adversarial" was a small-sample overstatement — caught by expanding the thin category. **(Update: the reranker was then tuned to ~parity — see "Tuning hybrid_rerank" below — after which it wins adversarial and ties overall.)** (Caveat: `retrieval_eval` forces correct product, so this is retrieval precision *given* routing; the end-to-end routing-robustness re-run on the new lures is still deferred behind the spend cap.)
+
+### Tuning hybrid_rerank to ~parity (2026-05-31)
+
+The refreshed scorecard put `vector_only` ahead of `hybrid_rerank` on the strict bar. Two env-toggleable levers (`81eb3fe`), A/B'd via the free `retrieval_eval`:
+- `RERANK_POOL=vector` — rerank the vector top-N instead of the RRF/hybrid pool.
+- `RERANK_INCLUDE_PATH=1` — prepend each chunk's `section_path` to the text rerank-2 scores.
+
+**Attribution (strict-bar overall MRR; scorecards `181717` / `181929` / `153941`):**
+
+| config | overall | cross | adversarial |
+|---|---|---|---|
+| baseline (RRF pool, no path) | 0.558 | 0.449 | 0.585 |
+| vector pool **alone** | 0.558 | 0.464 | 0.558 |
+| section-path **alone** | 0.572 | 0.476 | 0.591 |
+| **both (now default)** | **0.598** | **0.515** | **0.617** |
+
+**The levers are synergistic — super-additive.** Alone they give +0.000 and +0.014; together +0.040. Mechanism: section-path is a *discriminating* signal that gets diluted by junk on the noisy RRF pool but separates cleanly on the vector pool — clean pool + structural context, each necessary, neither sufficient. My initial "RRF noise is the weak link" hypothesis was **wrong** (vector pool alone did nothing); the honest driver is the *interaction*, found only by isolating the levers.
+
+**Result:** tuned `hybrid_rerank` now **wins adversarial** (0.617 vs vector 0.539), **ties single** (0.747), **halves the cross gap** (0.449→0.515 vs 0.569), and is **~level overall** (0.598 vs 0.605). TEXT bar unchanged (~0.975), so no recall cost. Both levers are the default (`a528e14`, env-overridable) and deployed to the live demo. Scorecard `20260531T153941Z`.
+
+**Interview point:** I didn't accept "vector wins, rerank underperforms" — I formed two hypotheses, made them env-toggleable, A/B'd them for free on the retrieval eval, and *isolated* them. The pretty hypothesis (RRF noise) was wrong; the real win was a non-obvious synergy between a clean pool and structural context. Reranker now ~parity overall and best-in-class on the hard adversarial queries.
