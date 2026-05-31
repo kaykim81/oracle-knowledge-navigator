@@ -41,10 +41,16 @@ DATASET = Path(__file__).parent / "dataset.jsonl"
 RESULTS_DIR = Path(__file__).parent / "results"
 
 
-CATEGORIES = ["single", "cross", "adversarial"]
+CATEGORIES = ["single", "cross", "adversarial", "exact_term"]
+
+# exact_term is reported on the TEXT bar (its tokens live in chunk text, not
+# section headings, so the strict section bar reads ~0); all others on section.
+_CATEGORY_BAR = {"exact_term": "text"}
 
 
 def _category(q: dict) -> str:
+    if q.get("tag") == "exact_term":
+        return "exact_term"
     if q["id"].startswith("adv-"):
         return "adversarial"
     if len(q["expected_products"]) > 1:
@@ -117,27 +123,16 @@ def main() -> None:
     rows = asyncio.run(evaluate())
     text_table = summarize(rows, "text")
     section_table = summarize(rows, "section")
-    per_category = "".join(
-        f"### {cat} ({len([r for r in rows if r['category']==cat]) // len(MODES)} questions, "
-        f"section bar)\n\n{summarize([r for r in rows if r['category']==cat], 'section')}\n\n"
-        for cat in CATEGORIES if any(r["category"] == cat for r in rows)
-    )
+    def _cat_block(cat: str) -> str:
+        cat_rows = [r for r in rows if r["category"] == cat]
+        bar = _CATEGORY_BAR.get(cat, "section")
+        label = "TEXT bar" if bar == "text" else "section bar"
+        nq = len(cat_rows) // len(MODES)
+        return f"### {cat} ({nq} questions, {label})\n\n{summarize(cat_rows, bar)}\n\n"
 
-    # Tag slice: exact-term questions look up tokens (member names, codes,
-    # acronyms) that live in chunk TEXT, not headings — so the TEXT bar is the
-    # meaningful metric (the section bar reads ~0 for all modes). This is the
-    # lexical-favourable regime where BM25/hybrid are expected to shine.
-    exact = [r for r in rows if r.get("tag") == "exact_term"]
-    per_tag = ""
-    if exact:
-        nq = len({r["question_id"] for r in exact})
-        per_tag = (
-            f"## Exact-term slice (tag=exact_term, {nq} questions) — TEXT bar\n\n"
-            "Lexical-favourable lookups (exact member names / codes / acronyms). The "
-            "token lives in chunk text, not section paths, so the TEXT bar is the "
-            "meaningful metric here.\n\n"
-            f"{summarize(exact, 'text')}\n\n"
-        )
+    per_category = "".join(
+        _cat_block(cat) for cat in CATEGORIES if any(r["category"] == cat for r in rows)
+    )
 
     (RESULTS_DIR / f"{ts}_retrieval.jsonl").write_text(
         "\n".join(json.dumps(r) for r in rows) + "\n"
@@ -148,14 +143,11 @@ def main() -> None:
         f"top_k={TOP_K}.\n\n"
         f"## Relevance bar: keyword anywhere in chunk (lenient)\n\n{text_table}\n\n"
         f"## Relevance bar: keyword in section path (strict — right section)\n\n{section_table}\n\n"
-        f"## Per category (strict section bar)\n\n{per_category}"
-        f"{per_tag}"
+        f"## Per category (exact_term on TEXT bar; others on section bar)\n\n{per_category}"
     )
     print("\n## TEXT bar (lenient)\n" + text_table)
     print("\n## SECTION bar (strict)\n" + section_table)
-    print("\n## PER CATEGORY (section bar)\n" + per_category)
-    if per_tag:
-        print("\n" + per_tag)
+    print("\n## PER CATEGORY\n" + per_category)
     print(f"wrote {ts}_retrieval.md")
 
 

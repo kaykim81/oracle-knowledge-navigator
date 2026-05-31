@@ -29,7 +29,7 @@ log = logging.getLogger("evals.runner")
 
 ORCHESTRATOR_URL = os.getenv("ORCHESTRATOR_URL", "http://orchestrator:8000")
 MODES = ["vector_only", "hybrid", "hybrid_rerank"]
-CATEGORIES = ["single", "cross", "adversarial"]
+CATEGORIES = ["single", "cross", "adversarial", "exact_term"]
 DATASET = Path(__file__).parent / "dataset.jsonl"
 RESULTS_DIR = Path(__file__).parent / "results"
 QUERY_TIMEOUT = 300
@@ -69,6 +69,8 @@ def _chunks_from_trace(trace: list[dict]) -> list[dict]:
 
 
 def _category(q: dict) -> str:
+    if q.get("tag") == "exact_term":
+        return "exact_term"
     if q["id"].startswith("adv-"):
         return "adversarial"
     if len(q["expected_products"]) > 1:
