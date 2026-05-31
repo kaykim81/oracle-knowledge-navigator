@@ -333,3 +333,20 @@ Added a `keyword_only` mode (BM25/FTS5 only; commit `74c0d2f`) so the full compo
 - **Adversarial: keyword is worst (0.436)** — terminology lures are precisely BM25's failure mode, which is why those queries need semantics + reranking (rerank 0.617).
 
 `keyword_only` is an analysis/ablation mode only — not in the end-to-end runner or the MCP/demo surface (production stays on hybrid_rerank).
+
+### Exact-term slice — does BM25 beat dense on lexical lookups? (2026-05-31)
+
+The query set was semantic-biased, so the ablation under-tested the lexical regime BM25 is built for. Added 5 exact-term questions (tag `exact_term`: `OEP_Working`, `XCC` flexfield, `DRG`, `NSG`, `Create Accounting` — exact tokens grounded in chunk *text*, some rare at 2–3 chunks) and a tag-based **TEXT-bar** slice (the right metric, since these tokens live in body, not headings). Single stays 15 = 10 semantic + 5 exact (`8613eaa`). Scorecard `20260531T213348Z`.
+
+**Result (exact-term slice, TEXT bar, n=5):**
+
+| mode | recall@1 | MRR |
+|---|---|---|
+| keyword_only | 80% | 0.867 |
+| vector_only | 80% | 0.867 |
+| hybrid | 80% | 0.825 |
+| hybrid_rerank | **100%** | **1.000** |
+
+**A clean negative result.** BM25's textbook advantage on exact terms **did not appear** — `keyword_only` exactly *ties* `vector_only` (both 0.867). voyage-3-large embeds even rare exact tokens well enough to keep pace, so the lexical leg adds no edge on this corpus. `hybrid` (RRF) is *slightly worse* even here (0.825) — fusion dilution in every regime. The tuned `hybrid_rerank` wins the slice outright (1.000): the complementarity surfaces through *reranking the candidate pool*, not RRF fusion.
+
+**Cross-regime conclusion:** `vector_only` ≈ tuned `hybrid_rerank` are strongest across semantic, adversarial, *and* exact-term queries; naive `hybrid` underperforms everywhere; `keyword_only` is weakest except on exact-term, where it only ties. **Interview point:** I hypothesised exact-term queries would expose a BM25 edge and justify hybrid; I tested it and got a null — a strong modern embedder erases the classic lexical advantage on this corpus. Honest negative results are part of a credible eval. (n=5 — directional.)
