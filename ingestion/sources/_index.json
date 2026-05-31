@@ -54,6 +54,14 @@
           "url": "https://docs.oracle.com/en/cloud/saas/planning-budgeting-cloud/epbca/GUID-71622AFD-C1F0-4D40-A36F-85FA8AA305B6.pdf"
         },
         {
+          "doc_id": "epm-planning-admin",
+          "title": "Administering Planning",
+          "part_number": "E94139",
+          "note": "Core custom-Planning admin guide (book pfusa) — has the Dimension Editor Scenario/Version member CRUD missing from 'Administering Planning Modules' (epbca). Grouped under the Planning module (search_planning).",
+          "format": "pdf",
+          "url": "https://docs.oracle.com/en/cloud/saas/planning-budgeting-cloud/pfusa/EPM-INFORMATION-DEVELOPMENT-TEAM-E94139-6691CB58.pdf"
+        },
+        {
           "doc_id": "epm-fcc",
           "title": "Administering Financial Consolidation and Close",
           "part_number": "E93973-89",

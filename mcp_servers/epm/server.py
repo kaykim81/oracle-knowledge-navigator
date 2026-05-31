@@ -83,7 +83,8 @@ mcp = build_server(
     get_document_description=GET_DOCUMENT,
     list_topics_description=LIST_TOPICS,
     module_searches=[
-        {"name": "search_planning", "doc_ids": ["epm-planning"], "description": SEARCH_PLANNING},
+        {"name": "search_planning", "doc_ids": ["epm-planning", "epm-planning-admin"],
+         "description": SEARCH_PLANNING},
         {"name": "search_fcc", "doc_ids": ["epm-fcc"], "description": SEARCH_FCC},
         {"name": "search_narrative", "doc_ids": ["epm-narrative-reporting"],
          "description": SEARCH_NARRATIVE},
