@@ -87,6 +87,11 @@ def _recall_hit(chunks: list[dict], keywords: list[str]) -> bool:
 
 def run() -> list[dict]:
     dataset = [json.loads(line) for line in DATASET.read_text().splitlines() if line.strip()]
+    ids = os.getenv("EVAL_IDS")
+    if ids:
+        wanted = {i.strip() for i in ids.split(",") if i.strip()}
+        dataset = [q for q in dataset if q["id"] in wanted]
+        log.info("EVAL_IDS=%s -> running %d questions", ids, len(dataset))
     category = os.getenv("EVAL_CATEGORY")
     if category:
         dataset = [q for q in dataset if _category(q) == category]
