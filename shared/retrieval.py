@@ -35,15 +35,18 @@ RRF_K = 60
 # How many candidates to send to the reranker before taking top_k.
 RERANK_CANDIDATES = int(os.getenv("RERANK_CANDIDATES", "30"))
 
-# hybrid_rerank tuning (env-toggleable so configs can be A/B'd via retrieval_eval
-# without a rebuild). Defaults reproduce the current behaviour.
-#   RERANK_POOL: where rerank candidates come from — "hybrid" (RRF of vector+BM25,
-#     the default) or "vector" (vector top-N only; the RRF leg adds noise on this
-#     corpus, so a cleaner pool may rerank better).
-#   RERANK_INCLUDE_PATH: prepend each chunk's section path to the text the reranker
-#     scores, giving rerank-2 the structural context the strict section bar rewards.
-RERANK_POOL = os.getenv("RERANK_POOL", "hybrid").lower()
-RERANK_INCLUDE_PATH = os.getenv("RERANK_INCLUDE_PATH", "0") not in ("0", "false", "")
+# hybrid_rerank tuning, env-toggleable (set these to A/B configs via retrieval_eval
+# with no rebuild). Defaults are the tuned winning config (retrieval_eval 2026-05-31:
+# strict-bar MRR 0.558 → 0.598, ~level with vector_only and winning adversarial).
+# The two levers are SYNERGISTIC — neither alone gives the gain (+0.000 / +0.014
+# individually vs +0.040 together): a clean candidate pool plus structural context.
+#   RERANK_POOL: rerank candidates from "vector" (vector top-N, default) or "hybrid"
+#     (RRF of vector+BM25). On its own the pool choice barely matters; it pays off
+#     only paired with the section-path signal below.
+#   RERANK_INCLUDE_PATH: prepend each chunk's section path to the text rerank-2
+#     scores, giving it the structural context the strict section bar rewards.
+RERANK_POOL = os.getenv("RERANK_POOL", "vector").lower()
+RERANK_INCLUDE_PATH = os.getenv("RERANK_INCLUDE_PATH", "1") not in ("0", "false", "")
 
 # Relevance floor for hybrid_rerank: drop results scoring below this so a query
 # with no genuinely relevant chunk returns [] and the orchestrator abstains
