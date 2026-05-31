@@ -80,7 +80,7 @@ async def evaluate() -> list[dict]:
             for mode in MODES:
                 results = await retrieval.retrieve(q["question"], product, mode, top_k=TOP_K)
                 row = {"question_id": q["id"], "category": _category(q),
-                       "product": product, "mode": mode}
+                       "tag": q.get("tag"), "product": product, "mode": mode}
                 for bar in BARS:
                     rank = _first_match_rank(results, q["expected_section_keywords"], bar)
                     row[f"rank_{bar}"] = rank
@@ -123,6 +123,22 @@ def main() -> None:
         for cat in CATEGORIES if any(r["category"] == cat for r in rows)
     )
 
+    # Tag slice: exact-term questions look up tokens (member names, codes,
+    # acronyms) that live in chunk TEXT, not headings — so the TEXT bar is the
+    # meaningful metric (the section bar reads ~0 for all modes). This is the
+    # lexical-favourable regime where BM25/hybrid are expected to shine.
+    exact = [r for r in rows if r.get("tag") == "exact_term"]
+    per_tag = ""
+    if exact:
+        nq = len({r["question_id"] for r in exact})
+        per_tag = (
+            f"## Exact-term slice (tag=exact_term, {nq} questions) — TEXT bar\n\n"
+            "Lexical-favourable lookups (exact member names / codes / acronyms). The "
+            "token lives in chunk text, not section paths, so the TEXT bar is the "
+            "meaningful metric here.\n\n"
+            f"{summarize(exact, 'text')}\n\n"
+        )
+
     (RESULTS_DIR / f"{ts}_retrieval.jsonl").write_text(
         "\n".join(json.dumps(r) for r in rows) + "\n"
     )
@@ -133,10 +149,13 @@ def main() -> None:
         f"## Relevance bar: keyword anywhere in chunk (lenient)\n\n{text_table}\n\n"
         f"## Relevance bar: keyword in section path (strict — right section)\n\n{section_table}\n\n"
         f"## Per category (strict section bar)\n\n{per_category}"
+        f"{per_tag}"
     )
     print("\n## TEXT bar (lenient)\n" + text_table)
     print("\n## SECTION bar (strict)\n" + section_table)
     print("\n## PER CATEGORY (section bar)\n" + per_category)
+    if per_tag:
+        print("\n" + per_tag)
     print(f"wrote {ts}_retrieval.md")
 
 
