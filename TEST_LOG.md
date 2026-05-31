@@ -241,7 +241,7 @@ A chunking-quality fix (corpus re-packed 7740 → 2574 right-sized chunks; see `
 
 ### Root cause & the honesty note
 
-The `epm` knowledge base **conflates three EPM modules in one collection**, so a Planning question retrieves FCC chunks. The durable fix is data/architecture (per-module sub-collections or a module filter), not prompt-tuning — logged as future work.
+The `epm` knowledge base **conflates three EPM modules in one collection**, so a Planning question retrieves FCC chunks. The durable fix is data/architecture (module scoping), not prompt-tuning — **now implemented and verified** (see "Cross-module bleed fix" below).
 
 **On the limits of automated verification:** a fact-check agent labeled the FCC-sourced answer "well-cited-but-wrong" because the FCC guide marks those scenario properties "not used in Financial Consolidation and Close." That verdict **over-read the disclaimer** — Start/End Yr and Exchange Rate Table are almost certainly genuine *Planning* scenario properties (the FCC note means "FCC ignores these," implying they apply elsewhere). At this depth both the system's answers *and* our automated checks carry Oracle domain uncertainty; reliable adjudication needs an SME. We stopped tuning here.
 
@@ -253,3 +253,20 @@ The `epm` knowledge base **conflates three EPM modules in one collection**, so a
 - **Know when a knob can't work.** A single relevance floor can't separate cross-product-relevant (~0.5) from off-topic (~0.5) — they overlap. Recognizing the impossibility beat shipping a number that quietly halves cross-product recall.
 - **Name the failure mode in the prompt.** Generic "don't guess" failed; "EPM = three modules that don't cross-apply, here's the source signal" partly worked. Specific beats general.
 - **Be honest about your own tools.** The fact-check agent was confidently wrong (over-read a disclaimer). Automated verification is a strong filter, not an oracle — at domain-expertise depth, flag the uncertainty instead of trusting the verdict.
+
+### Cross-module bleed fix — module-scoped EPM retrieval (2026-05-31)
+
+The EPM cross-module bleed (a Planning question synthesizing FCC content) is fixed with **routing-based module scoping**, chosen over a model-set filter param or query keyword auto-detection because it makes the bleed *structurally impossible* given correct routing and reuses the tool-selection mechanism already at 100% on cross-product routing. **No re-ingest** — `doc_id` was already stored.
+
+- **Data layer:** `qdrant_store.search` + `db.search_bm25` take a `doc_ids` filter, threaded through `retrieve()` (commit `e26bf0f`, smoke-tested).
+- **Tools:** the EPM server exposes `search_planning` / `search_fcc` / `search_narrative` (each scoped by `doc_id`) instead of one `search_docs`; routing to a module's tool can't return another module's chunks (`e36256a`). ERP/OCI unchanged.
+- **Prompt:** route to the named module's tool; don't call a sibling to fill a gap (`b3af7a7`).
+
+**Live verification (VPS), both directions:**
+
+| question | tools called | sources | outcome |
+|---|---|---|---|
+| "manage scenarios and versions in EPM **Planning**" | `epm_search_planning` ×5 | Planning guide only | **no FCC bleed**; honestly notes dimension-editor CRUD is in a non-ingested companion guide |
+| "post a **consolidation journal** during the close" | `epm_search_fcc` ×4 | FCC guide (Ch. 19) | correctly FCC-grounded |
+
+**The progression that makes the talking point:** same Planning question, three attempts — (1) no fix → confident FCC answer; (2) prompt-only → still blended FCC ("well-cited-but-wrong"); (3) module-scoped tools → `search_planning` only, FCC structurally impossible. **A structural fix beat soft prompt guidance** — the layer the fix lives in matters more than how strongly you word the instruction. And the fix turned a *masked* failure (FCC-as-Planning) into an *honest* one (the answer now says which content isn't in its sources and where to look).

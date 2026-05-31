@@ -329,8 +329,28 @@ After the re-ingest we re-ran the evals to check the chunking fix didn't regress
 - **Grounding prompt (`439aeb2`, fix #3) — insufficient.** Strengthened "abstain when passages don't address the question." The model instead searched harder and produced a confident answer *with* citations — better traceability, but it pulled Financial-Consolidation (FCC) scenario content into a *Planning* answer.
 - **Sub-domain-aware prompt (`45289a3`) — partial improvement.** Told the model that EPM spans distinct modules (Planning/FCC/Narrative) that don't cross-apply, to use each chunk's source doc, and to honor in-text applicability notes. Re-run: the answer now **leads with Planning-genuine content, labels its FCC-sourced quotes, and points to the Planning guide as the authority** — but still blends some FCC material.
 
-**The deeper root cause:** the `epm` knowledge base conflates three EPM modules in one Qdrant collection, so a Planning question retrieves FCC chunks. Real fix is data/architecture (split EPM into per-module sub-collections or add a module filter) — out of scope for the demo; logged as future work.
+**The deeper root cause:** the `epm` knowledge base conflates three EPM modules in one Qdrant collection, so a Planning question retrieves FCC chunks. Real fix is data/architecture (module scoping) — **now implemented, see "Cross-module bleed fix" below.**
 
-**Honesty note — limits of automated verification.** A fact-check agent flagged the FCC-sourced answer as "well-cited-but-wrong" because the FCC guide's Table 14-11 marks those scenario properties "not used in Financial Consolidation and Close." On review that verdict **over-read the disclaimer**: those properties (scenario Start/End Yr, Exchange Rate Table) are almost certainly genuine *Planning* properties — the FCC note means "FCC ignores these," implying they apply elsewhere. At this depth, both the system's answers and our automated checks carry Oracle domain uncertainty; reliable adjudication needs an SME, not another agent pass. Stopped tuning here — the chunking fix is the solid deliverable; the grounding findings are a characterized, honestly-bounded investigation.
+**Honesty note — limits of automated verification.** A fact-check agent flagged the FCC-sourced answer as "well-cited-but-wrong" because the FCC guide's Table 14-11 marks those scenario properties "not used in Financial Consolidation and Close." On review that verdict **over-read the disclaimer**: those properties (scenario Start/End Yr, Exchange Rate Table) are almost certainly genuine *Planning* properties — the FCC note means "FCC ignores these," implying they apply elsewhere. At this depth, both the system's answers and our automated checks carry Oracle domain uncertainty; reliable adjudication needs an SME, not another agent pass.
+
+---
+
+## Cross-module bleed fix — module-scoped EPM retrieval (2026-05-31)
+
+The "deeper root cause" above, fixed. The `epm` collection holds three module guides (Planning/FCC/Narrative); a Planning question retrieved FCC chunks and the model synthesized them. Chosen fix: **routing-based module scoping** — the most reliable option, since it makes the bleed *structurally impossible* given correct routing, and reuses the tool-selection mechanism already measured at 100% on cross-product routing. Crucially, **no re-ingest** was needed — `doc_id` is already in the Qdrant payload and SQLite.
+
+Commits: `e26bf0f` (data-layer filter), `e36256a` (per-module tools), `b3af7a7` (prompt).
+
+1. **`doc_ids` filter in the data layer.** `qdrant_store.search` (Qdrant `MatchAny` on `doc_id`) and `db.search_bm25` (`WHERE doc_id IN (…)`), threaded through `retrieve()` and all three modes. Smoke-tested in both stores.
+2. **Per-module EPM search tools.** `build_server` gained an optional `module_searches`; the EPM server now exposes **`search_planning` / `search_fcc` / `search_narrative`** (each scoped to its `doc_id`) instead of a single `search_docs` — routing to a module's tool *cannot* return another module's chunks. ERP/OCI unchanged (single `search_docs`). The orchestrator auto-discovers tools (no change); the eval bypasses MCP (calls `retrieve()` directly), so it's unaffected.
+3. **Prompt routing guidance.** Pick the EPM module tool the question names; don't call a sibling module's tool to fill a gap (abstain instead).
+
+**Verified live on the VPS, both directions:**
+- *"manage scenarios and versions in EPM Planning"* → all 5 searches hit **`epm_search_planning`**, every citation is the Planning guide, **zero FCC content**. The answer is honestly bounded — it presents the Planning material it found and notes the detailed dimension-editor CRUD lives in the companion *Administering Planning* guide that wasn't ingested, rather than fabricating it from FCC. (Same question previously pulled FCC scenario-CRUD — the original bug.)
+- *"post a consolidation journal during the close"* → all 4 searches hit **`epm_search_fcc`**, grounded in the FCC guide (Ch. 19 Managing Consolidation Journals). Routing discriminates the two vocabulary-sharing modules in both directions.
+
+**Why this worked where prompts didn't:** three attempts at the Planning question — (1) no fix → confident FCC answer; (2) prompt-only (grounding + sub-domain awareness) → still blended FCC ("well-cited-but-wrong"); (3) module-scoped tools → routes to `search_planning`, FCC structurally impossible. Tool-routing beat asking the model to police itself — the reliability argument held.
+
+**Residual / future work:** the coverage gap is now *visible and honest* rather than masked (Planning's dimension-editor CRUD is in a guide we didn't ingest → the answer says so and points there). Closing it means ingesting *Administering Planning*. The judge-snippet eval bug (judge on full text, not the 200-char trace snippet) is still open.
 
 ---
