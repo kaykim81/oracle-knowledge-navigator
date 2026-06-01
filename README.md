@@ -78,10 +78,11 @@ Most modules also have a CLI smoke test (e.g. `python -m shared.retrieval --help
 
 ## Evaluation
 
-The eval is the part I'd most want to defend in the interview, so it's deliberately rigorous and honest. Full methodology and findings: [TEST_LOG.md](TEST_LOG.md). Two levels:
+The eval is the part I'd most want to defend in the interview, so it's deliberately rigorous and honest. Full methodology and findings: [TEST_LOG.md](TEST_LOG.md). Two standard levels, plus targeted regime probes:
 
 1. **Retrieval-level** (`evals/retrieval_eval.py`) — compares the retrieval modes directly on `retrieve()`, no agent, no judge. Reports recall@k and MRR under two relevance bars (keyword anywhere = lenient; keyword in the *section path* = strict). Near-free, isolates exactly what the modes change.
 2. **End-to-end** (`evals/runner.py`) — queries the orchestrator once per mode and scores answers with an LLM-as-judge (Sonnet 4.6 over the Batches API) on correctness / groundedness / citation, plus routing accuracy and latency.
+3. **Targeted regime probes** (standalone, beyond the balanced set) — `evals/oov_slice.py` measures **out-of-vocabulary recall** (ultra-rare identifiers the embedder can't localize), and `evals/multidoc_eval.py` measures **multi-doc set-recall + nDCG** via TREC-style pooled LLM judgments — the metric that rewards retrieving the *complete* relevant set, not just the single best chunk.
 
 Dataset: **60 hand-built questions, balanced 15/15/15/15** — single-product, cross-product (ERP↔EPM), adversarial (terminology lures), and exact-term (member names / codes / acronyms — the BM25-favorable regime). The `retrieval_eval` adds a `keyword_only` (BM25) mode so the component ablation is *measured*, not inferred.
 
@@ -104,6 +105,7 @@ End-to-end (LLM-judged), `hybrid_rerank` led answer quality in every category �
 
 **Findings the eval surfaced — the honest part:**
 - **A small-sample trap, both directions.** An n=5 pilot *overstated* rerank's adversarial edge (an apparent "doubling") **and** *understated* BM25's exact-term edge — both corrected once each category grew to n=15. (That's why the set is balanced 15/15/15/15.)
+- **Hybrid's value is regime- *and* metric-dependent — and the metric was hiding it.** On the single-target section bar, naive RRF hybrid *dilutes* below the stronger leg (it never wins). But on **set-recall** — the RAG-relevant metric, via pooled LLM judgments (`evals/multidoc_eval.py`) — `hybrid_rerank` wins outright (recall@10 **0.791** / nDCG 0.701 vs vector 0.566), and on a constructed **OOV** slice (`evals/oov_slice.py`, rare tokens vector misses entirely) it rescues recall to **1.000 vs vector's 0.375**. Same system, opposite verdicts — which is why the fusion was rebuilt as per-query **adaptive** and the reranker's case rests on set-recall / answer-quality, not the single-target bar.
 - **Real bugs caught by the eval, not by eyeballing:** BM25 was OR-ing stopwords (dragging hybrid below vector); the LLM judge scored a 200-char snippet, under-measuring groundedness on larger chunks (it now sees full text).
 - **Routing is 100% on single/cross/exact-term but *hedges* on some adversarial lures** — it queries the right product *plus* a finance-vocab-suggested extra. Context-engineering the scope boundaries (encoding real Oracle product lines) fixed several, but the residual is intermittent and **harmless** (right product + extra; answers stay correct, groundedness 4.3+). That's prompt routing's probabilistic ceiling — a hard guarantee would need a routing classifier, not more prompt wording.
 
@@ -127,7 +129,7 @@ Full methodology, the per-run scorecards, and the reasoning behind each correcti
 | **Qdrant** | Fast, self-hostable vector DB; one collection per product gives clean isolation. |
 | **voyage-3-large** (1024-dim) embeddings + **rerank-2** | Top-tier retrieval quality; the reranker is what makes the hybrid candidate set pay off on hard queries. |
 | **SQLite + FTS5** | Zero-ops BM25 lexical search in-process; the keyword leg of hybrid retrieval. |
-| **Reciprocal Rank Fusion** | Score-free way to fuse vector + BM25 rankings; robust without tuning per-source score scales. |
+| **Adaptive hybrid fusion** (RRF / weighted env-selectable) | Default fuses vector + BM25 *per query* — vector for semantic queries, BM25 for exact-token lookups — recovering the cross/OOV coverage that naive equal-weight RRF diluted. Rank-only RRF and fixed-weight score fusion remain selectable baselines. |
 | **FastAPI** (orchestrator) + **Streamlit** (UI) | Minimal, well-understood; the trace-rendering UI is the demo's centerpiece. |
 | **Anthropic Batches API** for LLM-as-judge | Half-price, higher-throughput scoring — appropriate for offline eval. |
 | **Docker Compose** behind existing **Traefik** | Reproducible multi-service stack; Traefik handles TLS + basic auth without touching its config. |
@@ -140,7 +142,7 @@ ingestion/      fetch → chunk → embed → write pipeline (run as a one-shot 
 mcp_servers/    erp / oci / epm — thin per-product config over the factory
 orchestrator/   FastAPI + Claude agent loop (MCP client), system prompt
 ui/             Streamlit single-page app (answer + agent trace)
-evals/          dataset, retrieval scorecard, end-to-end runner, LLM judge
+evals/          dataset, retrieval scorecard, end-to-end runner, LLM judge, OOV + multi-doc set-recall probes
 ```
 
 Build history and per-phase decisions: [DEVELOP_LOG.md](DEVELOP_LOG.md).  
