@@ -375,3 +375,29 @@ Promoted `exact_term` to a full category (15 questions; dataset now 60 = 15/15/1
 | adversarial | (rerank) | keyword |
 
 `hybrid_rerank` is the **only mode that wins or ties every regime** (best on adversarial 0.617 and exact-term 1.000; ~ties vector on single 0.747; competitive on cross 0.515). That is the empirical justification for shipping it: when the query distribution is unknown, the reranker is the robust choice — vector covers semantic, keyword covers lexical, rerank covers both.
+
+### Refreshed end-to-end LLM-judge run — 60 questions, current system (2026-06-01)
+
+First full end-to-end run on the *current* stack (60-q dataset, tuned rerank default, module-scoped EPM tools, coverage fix, judge-snippet fix). 60 q × 3 modes, LLM-judged. Summary `20260531T221433Z`.
+
+**`hybrid_rerank` wins judged answer quality in every category** (overall 3.97 vs vector 3.79 vs hybrid 3.66):
+
+| category | vector | hybrid | hybrid_rerank |
+|---|---|---|---|
+| single | 4.27 | 4.29 | **4.36** |
+| cross | 3.02 | 2.76 | **3.27** |
+| adversarial | 4.13 | 3.84 | **4.22** |
+| exact_term | 3.76 | 3.76 | **4.04** |
+
+On *answer quality* (what ships) the tuned reranker is best across the board — a stronger result than the retrieval-level story, and the empirical case for the production default. **Groundedness recovered to ~3.7–4.1** (rerank 4.10) — confirms the judge-snippet fix end-to-end (it was an artifact-depressed ~2.4 before).
+
+**Routing — 100% on single/cross/exact_term; adversarial ~80%, but it's *hedging*, not misrouting.** Every adversarial "miss" is the correct product **plus** one extra lure-suggested product — the router never routes to *only* the wrong place:
+
+| lure | expected | routed | pull |
+|---|---|---|---|
+| archive **financial statements**… | oci | +epm/erp | "financial" |
+| isolate department **budget** data… | oci | +epm | "budget" |
+| balance **intercompany**… two ledgers | erp | +epm | "intercompany" |
+| **security policy**… which users access… | oci | +erp | "security" |
+
+The answers stayed correct (adversarial groundedness 4.3–4.5). Some lures are *genuinely* cross-product (intercompany spans ERP+EPM; financial data in OCI storage touches both), so hedging is partly correct behavior; the strict set-match metric just penalizes the extra call. (Per-mode routing spread 87/73/80% is LLM nondeterminism — routing is mode-independent.) Tightening these 4 scope descriptions (Phase-8 style) could trim the hedge, at the risk of over-constraining the genuinely-ambiguous ones.
