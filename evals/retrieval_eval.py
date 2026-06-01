@@ -115,6 +115,22 @@ def summarize(rows: list[dict], bar: str) -> str:
     return "\n".join(lines)
 
 
+def _rerank_config() -> str:
+    """The hybrid_rerank tuning config in effect for this run.
+
+    These are env-driven module constants in `shared.retrieval` read at import,
+    and they affect the `hybrid_rerank` mode only. Stamping them into the result
+    makes a scorecard self-describing — e.g. which candidate pool the reranker
+    drew from (`vector` default vs `hybrid`/RRF) — so two runs are comparable.
+    """
+    return (
+        f"pool={retrieval.RERANK_POOL}, "
+        f"include_path={retrieval.RERANK_INCLUDE_PATH}, "
+        f"candidates={retrieval.RERANK_CANDIDATES}, "
+        f"min_score={retrieval.MIN_RERANK_SCORE}"
+    )
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -141,10 +157,12 @@ def main() -> None:
         f"# Retrieval scorecard — {ts}\n\n"
         f"{len(rows)} (question, product, mode) evaluations across {len(MODES)} modes, "
         f"top_k={TOP_K}.\n\n"
+        f"**hybrid_rerank config:** {_rerank_config()}\n\n"
         f"## Relevance bar: keyword anywhere in chunk (lenient)\n\n{text_table}\n\n"
         f"## Relevance bar: keyword in section path (strict — right section)\n\n{section_table}\n\n"
         f"## Per category (exact_term on TEXT bar; others on section bar)\n\n{per_category}"
     )
+    print(f"\nhybrid_rerank config: {_rerank_config()}")
     print("\n## TEXT bar (lenient)\n" + text_table)
     print("\n## SECTION bar (strict)\n" + section_table)
     print("\n## PER CATEGORY\n" + per_category)
