@@ -146,5 +146,6 @@ evals/          dataset, retrieval scorecard, end-to-end runner, LLM judge, OOV 
 ```
 
 Build history and per-phase decisions: [DEVELOP_LOG.md](DEVELOP_LOG.md).  
-Per-phase verification and eval findings: [TEST_LOG.md](TEST_LOG.md).
+Per-phase verification and eval findings: [TEST_LOG.md](TEST_LOG.md).  
+Engineering retrospective — what this build taught me: [LESSON_LEARNED.md](LESSON_LEARNED.md).
 
