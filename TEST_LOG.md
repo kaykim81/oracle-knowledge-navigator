@@ -401,3 +401,16 @@ On *answer quality* (what ships) the tuned reranker is best across the board —
 | **security policy**… which users access… | oci | +erp | "security" |
 
 The answers stayed correct (adversarial groundedness 4.3–4.5). Some lures are *genuinely* cross-product (intercompany spans ERP+EPM; financial data in OCI storage touches both), so hedging is partly correct behavior; the strict set-match metric just penalizes the extra call. (Per-mode routing spread 87/73/80% is LLM nondeterminism — routing is mode-independent.) Tightening these 4 scope descriptions (Phase-8 style) could trim the hedge, at the risk of over-constraining the genuinely-ambiguous ones.
+
+### Routing hardening for the cloud-infra lures — partial, and the honest ceiling (2026-06-01)
+
+The end-to-end run (above) showed the router *hedging* on adversarial lures that wrap a cloud-infra question in finance vocabulary. Hardened the scope boundaries (commit `2c370d6`): OCI now explicitly *claims* storing/archiving any files (incl. financial statements) and isolating budget/financial data into compartments; ERP and EPM *disclaim* cloud storage/archival/compartment isolation — durable product-boundary facts, not question→answer mappings. Left the genuinely cross-product `intercompany` lure alone.
+
+**Spot-checks (single runs):** all three hardened lures routed cleanly to **OCI only** — `budget data into its own space`, `archive financial statements`, `security policy / which users access`.
+
+**But the adversarial re-run (`EVAL_CATEGORY=adversarial`, summary `20260601T002238Z`) showed routing stayed ~80%** (vector 80 / hybrid 87 / rerank 80) — *not* the ~93% the spot-checks suggested. Pulling the JSONL:
+- **`security-policy-users` — fixed** (gone from the miss list).
+- **`archive-financial` (→ERP) and `compartment-budget` (→EPM) still hedge ~half the time** — the single spot-checks just got lucky; across more samples the strong words ("financial statements", "budget") still pull the extra product intermittently.
+- **`gl-intercompany` hedges** — expected; intentionally left (genuinely spans ERP+EPM).
+
+**The honest lesson:** prompt-based routing has a **probabilistic ceiling** — hardening shifts the odds (fixed one lure, reduced the others) but can't make a soft prompt deterministic, and over-fitting the wording to chase the metric is what the eval exists to prevent. Crucially the residual is **"right product + a wasteful extra," never wrong-routing**, so it's harmless: this run scored **quality 4.04–4.18, groundedness 4.27–4.40, recall 93–100%** on adversarial — the answers are correct; the strict set-match metric just penalizes the extra call. A *hard* guarantee would need a structural fix (a routing classifier or a post-route relevance check before answering) — logged as future work, out of scope for the demo.
