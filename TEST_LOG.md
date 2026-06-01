@@ -520,3 +520,22 @@ Experiment 3 exposed the regex router's blind spot: it gates BM25 off for acrony
 **Verdict.** The regex *structural* signal stays the better default — false-positive-free on the balanced eval (identifier structure is unambiguous; ordinary words have no underscores/dots), Pareto-dominant at sem=1.0. `idf`/`both` are env options that buy rare-acronym recall (the OOV regime) at an adversarial-precision cost. The clean separator would combine *orthography* (all-caps / alphanumeric identifier shape — distinguishes `XCC` from `isolate`) with rarity, or a learned query classifier — pure DF is insufficient because in a small corpus, ordinariness and distinctiveness both look "rare."
 
 **Through-line.** Every layer of this system is regime-dependent — the retriever (vector vs keyword), the fusion (rrf vs weighted vs adaptive), and now the router *signal* itself (structure vs rarity). Each choice trades precision in one regime for recall in another; the robust production answer is reranking a sparse+dense pool with the router tuned to the expected query mix. Defaults stay `rrf` / `regex` (no live change); `idf`/`both` documented for OOV-heavy deployments. Scorecards: global-idf `175750` (both) / `175841` (idf); product-scoped `175032`/`175219` (superseded by global).
+
+### Experiment 1: multi-doc set-recall via pooled judgments — the metric that reveals hybrid (2026-06-01)
+
+The diagnosis named the **single-target metric** (recall@1 / MRR vs *one* keyword-defined chunk) as cause #2: it rewards the single best rank, so fusion can only dilute. But a credible *multi-doc* gold can't be defined cheaply — keyword/section proxies are too coarse (a section keyword matches a **32–141**-chunk subtree, verified). So I used TREC-style **pooled relevance judgments** (`evals/multidoc_eval.py`): for each (query, product) unit over the semantic categories (single + cross, n=45), pool the top-10 of all four modes (avg **21** candidates), have Sonnet 4.6 grade each passage 0–3 in one call, take gold = judged ≥2 (avg **4.7** relevant/unit), and score **set-recall@10 + graded nDCG@10**.
+
+**Result (n=42 units with non-empty gold):**
+
+| mode | set-recall@10 | nDCG@10 |
+|---|---|---|
+| keyword_only | 0.429 | 0.476 |
+| vector_only | 0.566 | 0.629 |
+| **hybrid (RRF)** | **0.683** | **0.644** |
+| **hybrid_rerank** | **0.791** | **0.701** |
+
+**The union benefit, finally measured.** On set-recall, **`hybrid` (RRF) beats *both* legs** (0.683 > vector 0.566 > keyword 0.429) — the textbook hybrid win that was *invisible* on the single-target metric, where the **identical** RRF hybrid landed *below* vector via dilution. `hybrid_rerank` wins outright (0.791 recall, 0.701 nDCG) — reranking the sparse+dense union pulls more of the relevant set into the top-10 and orders it better.
+
+**This closes cause #2 with a measurement, not an argument:** the metric, not the retriever, was hiding hybrid. Single-target (one relevant chunk → fusion dilutes) and set-recall (many relevant chunks → the union covers complementary docs) give **opposite verdicts on the identical system**. And set-recall is the metric that matters for RAG — the LLM needs the *complete* set of relevant context, not just the single best chunk — so `hybrid_rerank`'s win here is the decision-relevant one (and lines up with its end-to-end answer-quality lead).
+
+**Synthesis — hybrid's value depends on two axes.** The **regime** (semantic / exact-term / OOV / adversarial) *and* the **metric** (single-target vs set-recall). The single-target balanced eval made RRF hybrid look strictly worse than vector; the set-recall metric shows hybrid > both legs and rerank-the-union best. *Caveat:* pooled-judgment gold has pooling bias (gold drawn from the systems compared) — standard IR practice, mitigated by pooling all four modes. Cost ~$0.6 (45 single-call judgments).
