@@ -1,3 +1,4 @@
+.claude
 .env
 .venv/
 __pycache__/
@@ -14,3 +15,4 @@ PROJECT_CONTEXT.md
 navigator-data-*
 ACRONYM.md
 STORY.md
+CODEBASE_MAP.md

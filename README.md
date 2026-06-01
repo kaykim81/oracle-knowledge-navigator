@@ -143,5 +143,5 @@ ui/             Streamlit single-page app (answer + agent trace)
 evals/          dataset, retrieval scorecard, end-to-end runner, LLM judge
 ```
 
-Build history and per-phase decisions: [PROGRESS.md](PROGRESS.md). 
+Build history and per-phase decisions: [DEVELOP_LOG.md](DEVELOP_LOG.md). 
 Per-phase verification and eval findings: [TEST_LOG.md](TEST_LOG.md).

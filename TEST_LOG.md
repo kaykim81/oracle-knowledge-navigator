@@ -223,7 +223,7 @@ End-to-end p50 ~28–33s, p95 76–157s — the demo's real weakness, dominated 
 
 ## Post-chunking-fix re-eval & grounding investigation (2026-05-31)
 
-A chunking-quality fix (corpus re-packed 7740 → 2574 right-sized chunks; see `PROGRESS.md`) prompted a full re-eval. The fix moved the numbers in three distinct ways, and chasing the third surfaced a real, pre-existing grounding weakness. New scorecards: `20260531T022451Z_retrieval` (post-fix baseline), `20260531T024257Z_summary` (judge), `20260531T123618Z_retrieval` (floor=0.6).
+A chunking-quality fix (corpus re-packed 7740 → 2574 right-sized chunks; see `DEVELOP_LOG.md`) prompted a full re-eval. The fix moved the numbers in three distinct ways, and chasing the third surfaced a real, pre-existing grounding weakness. New scorecards: `20260531T022451Z_retrieval` (post-fix baseline), `20260531T024257Z_summary` (judge), `20260531T123618Z_retrieval` (floor=0.6).
 
 ### Three-layer result
 
