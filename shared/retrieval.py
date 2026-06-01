@@ -23,6 +23,7 @@ import argparse
 import asyncio
 import logging
 import os
+import re
 import time
 
 from . import db, embeddings, qdrant_store
@@ -32,6 +33,23 @@ log = logging.getLogger(__name__)
 
 # Reciprocal Rank Fusion constant (standard value).
 RRF_K = 60
+
+# Hybrid fusion method, env-toggleable for the A/B (cause-#3 experiment: is naive
+# rank-only RRF the weak link, or is it the corpus?). "rrf" (default) = Reciprocal
+# Rank Fusion (rank-only, equal weight). "weighted" = convex combination of per-leg
+# min-max-normalized scores: HYBRID_ALPHA*vector + (1-HYBRID_ALPHA)*bm25 — unlike
+# RRF this preserves score *magnitude* and lets the stronger (vector) leg outweigh.
+HYBRID_FUSION = os.getenv("HYBRID_FUSION", "rrf").lower()
+HYBRID_ALPHA = float(os.getenv("HYBRID_ALPHA", "0.5"))  # weight on the vector leg
+
+# For HYBRID_FUSION="adaptive": route alpha per query by lexicality. An identifier-
+# like query token (snake_case / dotted multi-part — OEP_Working, VM.Standard.E4.Flex,
+# AP_INVOICE_LINES_ALL) signals an exact-token lookup where BM25 wins, so use a
+# BM25-leaning alpha; otherwise a vector-leaning alpha. (A production version would
+# weight by token IDF / document-frequency; this regex is a high-precision proxy.)
+HYBRID_ALPHA_LEXICAL = float(os.getenv("HYBRID_ALPHA_LEXICAL", "0.3"))
+HYBRID_ALPHA_SEMANTIC = float(os.getenv("HYBRID_ALPHA_SEMANTIC", "0.8"))
+
 # How many candidates to send to the reranker before taking top_k.
 RERANK_CANDIDATES = int(os.getenv("RERANK_CANDIDATES", "30"))
 
@@ -111,6 +129,49 @@ def _rrf_fuse(ranked_lists, top_k):
             chunks[chunk.id] = chunk
     ordered = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:top_k]
     return [(chunks[cid], score) for cid, score in ordered]
+
+
+def _weighted_fuse(vector_hits, bm25_hits, top_k, alpha):
+    """Convex score fusion: alpha*norm(vector) + (1-alpha)*norm(bm25).
+
+    Each leg's scores are min-max normalized over its own candidate set (the legs
+    use different scales — cosine vs negated BM25 — so raw magnitudes aren't
+    comparable). A doc missing from a leg contributes 0 from that leg. Unlike RRF,
+    this keeps score *magnitude* (a confident vector hit stays confident) and lets
+    one leg outweigh the other via ``alpha`` (the weight on the vector leg).
+    """
+    def _norm(hits):
+        if not hits:
+            return {}
+        ss = [s for _, s in hits]
+        lo, hi = min(ss), max(ss)
+        rng = hi - lo
+        return {c.id: ((s - lo) / rng if rng else 1.0) for c, s in hits}
+
+    vnorm, bnorm = _norm(vector_hits), _norm(bm25_hits)
+    chunks = {c.id: c for c, _ in bm25_hits}
+    chunks.update({c.id: c for c, _ in vector_hits})
+    fused = [
+        (chunk, alpha * vnorm.get(cid, 0.0) + (1 - alpha) * bnorm.get(cid, 0.0))
+        for cid, chunk in chunks.items()
+    ]
+    fused.sort(key=lambda x: x[1], reverse=True)
+    return fused[:top_k]
+
+
+# Identifier-like query tokens (snake_case, dotted multi-part) mark an exact-token
+# lookup — the regime where BM25 beats dense — so the adaptive router leans BM25 there.
+_IDENTIFIER_RE = re.compile(r"\w+_\w+|\w+(?:\.\w+){2,}")
+
+
+def _looks_lexical(query: str) -> bool:
+    """True if the query carries an identifier-like exact token (favor BM25)."""
+    return bool(_IDENTIFIER_RE.search(query))
+
+
+def _adaptive_alpha(query: str) -> float:
+    """Per-query vector-leg weight: BM25-leaning for lexical queries, else vector-leaning."""
+    return HYBRID_ALPHA_LEXICAL if _looks_lexical(query) else HYBRID_ALPHA_SEMANTIC
 
 
 async def retrieve(
@@ -194,7 +255,12 @@ async def _hybrid(
         )
 
     vector_hits, bm25_hits = await asyncio.gather(vector_leg(), bm25_leg())
-    fused = _rrf_fuse([vector_hits, bm25_hits], top_k)
+    if HYBRID_FUSION == "weighted":
+        fused = _weighted_fuse(vector_hits, bm25_hits, top_k, HYBRID_ALPHA)
+    elif HYBRID_FUSION == "adaptive":
+        fused = _weighted_fuse(vector_hits, bm25_hits, top_k, _adaptive_alpha(query))
+    else:
+        fused = _rrf_fuse([vector_hits, bm25_hits], top_k)
     latency_ms = round((time.perf_counter() - t0) * 1000, 1)
     return [
         SearchResult(chunk=chunk, score=score, retrieval_mode="hybrid",
@@ -277,6 +343,30 @@ def _selftest() -> None:
     assert len(_apply_score_floor(res, 0.0)) == 3, "floor<=0 should disable filtering"
     assert _apply_score_floor([_Scored(0.03)], 0.1) == [], "all-below-floor should be empty (-> abstain)"
     print(f"OK: score floor (env default MIN_RERANK_SCORE={MIN_RERANK_SCORE})")
+
+    # weighted fusion: normalize per leg, weight the vector leg via alpha
+    class _C:
+        def __init__(self, i): self.id = i
+    a, b, d, c, e = _C("a"), _C("b"), _C("d"), _C("c"), _C("e")
+    vhits = [(a, 1.0), (b, 0.7), (d, 0.4)]    # vector: a best, b middling, d worst
+    bhits = [(c, 10.0), (b, 7.0), (e, 4.0)]   # bm25 (different scale): c best, b middling, e worst
+    assert _weighted_fuse(vhits, bhits, 3, alpha=1.0)[0][0].id == "a", "alpha=1.0 -> top vector hit first"
+    assert _weighted_fuse(vhits, bhits, 3, alpha=0.0)[0][0].id == "c", "alpha=0.0 -> top bm25 hit first"
+    # balanced: b is #2 in *both* legs -> consensus lifts it level with each leg's #1
+    ids = {ch.id for ch, _ in _weighted_fuse(vhits, bhits, 3, alpha=0.5)}
+    assert ids == {"a", "b", "c"}, f"balanced fusion should reward the consensus doc, got {ids}"
+    print("OK: weighted fusion (alpha sweep + consensus)")
+
+    # adaptive lexicality router: identifier-like tokens -> lexical (favor BM25)
+    assert _looks_lexical("What does the AP_INVOICE_LINES_ALL table store?"), "snake_case ID not detected"
+    assert _looks_lexical("What is the VM.Standard.E4.Flex compute shape?"), "dotted ID not detected"
+    assert _looks_lexical("What is the OEP_Forecast scenario member?"), "snake_case ID not detected"
+    assert not _looks_lexical("How do I create a VCN and subnet in OCI Networking?"), "semantic query misflagged"
+    assert not _looks_lexical("What is the difference between security lists and network security groups?"), "semantic query misflagged"
+    assert _adaptive_alpha("OEP_Forecast member") == HYBRID_ALPHA_LEXICAL
+    assert _adaptive_alpha("how do I reverse a journal entry") == HYBRID_ALPHA_SEMANTIC
+    print("OK: adaptive lexicality router (identifier queries -> BM25-leaning)")
+
     print("ALL RETRIEVAL SELF-TESTS PASSED")
 
 

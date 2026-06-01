@@ -451,3 +451,29 @@ Set stays 15 (5 EPM / 6 OCI / 4 ERP); all keywords verified present in the targe
 The hybrid pool **loses or ties every category — even exact_term**. Mechanism: `vector_only` recall@10 on exact_term is 100% — the right exact-token chunk is *already in* the 30-deep vector candidate pool, just mis-ranked; the reranker recovers it from the clean vector pool, and adding BM25 only injects noise. A clean negative result, reconfirming the 2026-05-31 tuning (vector pool + section path) even under the harder test.
 
 **Decision (deliberate, against the A/B): shipped `pool=hybrid` as the default** anyway (`shared/retrieval.py`, deployed to the 3 MCP servers via rebuild). The deployed default therefore trails the A/B optimum on cross (0.475 vs 0.515) and exact_term (0.922 vs 0.933) and beats it on nothing — recorded here in full rather than presented as a win. The answer-quality (LLM-judge) figures above predate this change and are **pending a runner re-run** against the new questions.
+
+### Why doesn't RRF hybrid show hybrid's strength? — fusion diagnosis + fix (2026-06-01)
+
+**The real question: why does `hybrid` (RRF) land *between* its two legs in every category, never above the stronger one?** Diagnosed it from the per-query data (scorecard `154138Z`, n=75 question×product, per-category bar), then fixed it.
+
+**Diagnosis — three compounding causes:**
+1. **Near-zero leg complementarity (dominant).** Both legs already find the target in 75% of queries; keyword *uniquely* rescues vector in only **2/75 (2.7%)**. voyage-3-large on a clean single-domain corpus already retrieves what BM25 would, plus more (vector recall@10 87% vs keyword 77%). Fusion gain is bounded by complementarity; here it's ~nil.
+2. **Single-target metric penalizes fusion.** recall@1/MRR rewards the single best rank; RRF rewards rank *consensus*. The better leg is already at rank 1 in **63%** of queries, where fusion has no upside and real downside. Measured: RRF beats both legs (additive win) in **7%** of queries but is *worse* than the better leg (dilution) in **28%** — net negative.
+3. **Naive fusion mechanism.** RRF is rank-only (discards vector's calibrated score magnitude) and equal-weight (the noisy OR-based BM25 leg gets an equal vote). Both flaws bit cross hardest.
+
+**Fix — score-based weighted fusion + per-query adaptive weighting** (`shared/retrieval.py`, env-toggleable: `HYBRID_FUSION=rrf|weighted|adaptive`, default `rrf`):
+- `weighted`: convex combination of per-leg min-max-normalized scores, `α·vector + (1−α)·bm25` — keeps magnitude, lets the stronger leg outweigh.
+- `adaptive`: route α per query by lexicality — an identifier-like token (snake_case / dotted: `OEP_Forecast`, `VM.Standard.E4.Flex`, `AP_INVOICE_LINES_ALL`) → BM25-leaning α; else vector-leaning α. (Regex proxy; production would use token IDF. 0 false positives on single/cross/adversarial; flags 8/15 exact_term.)
+
+**The ladder (`hybrid`-mode MRR; vector target single 0.744 / cross 0.569 / adv 0.539 / exact 0.813; bold = ≥ vector):**
+
+| fusion | single | cross | adversarial | exact_term | strict (n=60) |
+|---|---|---|---|---|---|
+| RRF (current default) | 0.706 | 0.475 | 0.506 | **0.908** | 0.541 |
+| weighted α=0.7 | 0.676 | **0.595** | 0.488 | **0.867** | 0.589 |
+| adaptive (lex 0.3 / sem 0.8) | 0.676 | **0.589** | 0.524 | **0.956** | 0.595 |
+| **adaptive (lex 0.3 / sem 1.0)** | **0.744** | **0.569** | **0.539** | **0.956** | **0.605** |
+
+**Result: adaptive at sem=1.0 strictly Pareto-dominates pure vector** — ties it on all three semantic regimes and beats it **+0.143 on exact_term (0.956, = `keyword_only`'s ceiling), zero regressions.** Mechanism: at sem=1.0 the semantic queries get α=1.0 (fusion degenerates to pure vector) while identifier queries get α=0.3 — the system has become a **dense-vs-sparse query router** that invokes BM25 only where it helps. sem=0.9 keeps fusion active everywhere: small cross edge (0.578) + adversarial tie (0.546) + exact win (0.956), single trails by 0.03 (strict 0.603 ≈ vector 0.605).
+
+**Answer to the question:** the RRF hybrid didn't show strength because the fusion was rank-only, equal-weight, and query-agnostic — on a clean corpus that only dilutes. Make fusion score-based + per-query adaptive and hybrid is ≥ vector everywhere and far better on the lexical regime. **Caveat:** this is the complementarity-poor regime (cause #1) — the win is *selective* (only exact-token queries genuinely need the sparse leg); on a noisier/multi-domain corpus the complementarity (and hybrid's margin) would be larger — that's Experiment 3 (next). Scorecards: weighted sweep `165645/170548/165735/170638`, adaptive `170728/171633/171724`. Modes stay env-toggleable, default `rrf` (production `hybrid_rerank` reranks the pool regardless, so live-answer impact is small — this is primarily an analysis/eval result).

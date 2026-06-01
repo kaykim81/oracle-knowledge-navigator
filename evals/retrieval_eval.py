@@ -127,7 +127,10 @@ def _rerank_config() -> str:
         f"pool={retrieval.RERANK_POOL}, "
         f"include_path={retrieval.RERANK_INCLUDE_PATH}, "
         f"candidates={retrieval.RERANK_CANDIDATES}, "
-        f"min_score={retrieval.MIN_RERANK_SCORE}"
+        f"min_score={retrieval.MIN_RERANK_SCORE}, "
+        f"hybrid_fusion={retrieval.HYBRID_FUSION}"
+        f"(alpha={retrieval.HYBRID_ALPHA}, "
+        f"lex={retrieval.HYBRID_ALPHA_LEXICAL}, sem={retrieval.HYBRID_ALPHA_SEMANTIC})"
     )
 
 
