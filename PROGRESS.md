@@ -365,4 +365,44 @@ The two residuals from the cross-module work, both closed. Commits: `d0ff48a` (s
 
 **Validation (cheap, end-to-end — full 45×3 deferred).** Per cheap-check-first: a 6-question slice showed groundedness recover **~2.4 → ~4.5** (the snippet artifact gone); then an `EVAL_IDS` end-to-end run on the two changed paths gave **`epm-plan-scenario` correctness 5.0 / groundedness 5.0** (the original "well-cited-but-wrong" question, now perfect), routing 100%, summary generated cleanly (coercion fix). Cross (`xp-erp-epm-flow`) groundedness ~2–3 — the known-weak category, not a regression.
 
-The full **45×3 scorecard refresh is deferred**: it's ~135 orchestrator queries (~$20–25), which would breach the $20 Anthropic cap given session spend. Every fix is verified individually + end-to-end; the refresh is a published-numbers update to run deliberately after raising the cap.
+The full 45×3 scorecard refresh was deferred here (~135 queries, ~$20–25, over the then-$20 cap). *(Update 2026-06-01: cap raised to $40; the full run was done — on the **60-question** set, after the rebalance below. See "Full end-to-end LLM-judge run" further down.)*
+
+---
+
+## Eval deepening — 4-mode ablation, dataset rebalance, reranker tuning (2026-05-31)
+
+Turned the eval from "3 modes, 45 q (30/10/5)" into a balanced **4-mode × 4-category** ablation, and used it to *tune* the reranker. Commits: dataset `a0012e3`/`8613eaa`/`4b7f175`/`8a51916`, `keyword_only` `74c0d2f`, rerank levers `81eb3fe`, default flip `a528e14`.
+
+**Dataset → 60 questions, balanced 15/15/15/15** (single / cross / adversarial / **exact_term**). Single trimmed to a clean spread; cross +5 (erp↔epm); adversarial +10 lures across all three target products (incl. *inverted* ones — "allocate overhead in the general ledger" → ERP, mirroring "allocation in Planning" → EPM, so the router can't memorize a keyword shortcut); exact_term = 15 lexical lookups (member names / codes / acronyms like `OEP_Working`, `XCC`, `DRG`, `NSG`) — the BM25-favorable regime. Every new question's keywords verified present in the target corpus.
+
+**`keyword_only` (BM25) mode added** (`retrieval_eval` only, not the runner or MCP/demo surface) so the component ablation is *measured*. `exact_term` is its own category, reported on the **TEXT bar** (its tokens live in chunk body, not headings, so the section bar reads ~0 for all modes).
+
+**The n=5 → n=15 corrections (both directions) — the methodology highlight:** at n=5, adversarial *overstated* rerank (an apparent recall@1 "doubling" 40→80%) and exact-term *understated* BM25 (keyword tied vector). At n=15 both regressed to the truth: rerank's adversarial edge is *modest* (53% vs 40%), and BM25 *edges* vector on exact-term (0.956 vs 0.906). Small samples lie in both directions — which is why the set is now balanced 15-per-category.
+
+**Reranker tuning — two synergistic levers, now the default.** `hybrid_rerank` trailed vector on the strict bar. Made two levers env-toggleable and A/B'd them on the (free) retrieval eval: `RERANK_POOL=vector` (rerank a clean vector pool, not the noisy RRF pool) + `RERANK_INCLUDE_PATH=1` (prepend each chunk's section path to the reranker input). **Isolated them: neither alone moves it (+0.000 / +0.014), together +0.040 — super-additive.** My "RRF noise is the weak link" hypothesis was wrong; the win is the *interaction* (clean pool + structural context). Flipped both on as the default (`a528e14`, env-overridable) and rebuilt the MCP servers so the live demo uses it.
+
+**All-regime retrieval verdict (strict bar, recall@1/MRR; exact_term on TEXT bar):** no single first-stage mode dominates — vector wins semantic (single/cross), keyword *edges* vector on exact-term, rerank wins adversarial; naive `hybrid` (RRF) underperforms everywhere. **Tuned `hybrid_rerank` wins or ties every regime** — the empirical case for the production default. Full tables in `TEST_LOG.md`.
+
+---
+
+## Full end-to-end LLM-judge run + routing hardening (2026-06-01)
+
+**Cap raised to $40 → ran the full 60-q × 3-mode judged run** (`evals/runner.py`; summary `20260531T221433Z`). Docs commit `a08d02f`.
+
+- **`hybrid_rerank` is best on judged answer quality in every category** — overall **3.97** vs vector 3.79 / hybrid 3.66; by category: single 4.36, cross 3.27, adversarial 4.22, exact_term 4.04. Stronger than the retrieval-level story: on *answer quality* (what ships) the tuned reranker wins outright.
+- **Groundedness recovered to ~3.7–4.1** (rerank 4.10) — confirms the judge-snippet fix end-to-end (was an artifact-depressed ~2.4).
+- **Routing: 100% on single/cross/exact_term; adversarial ~80% — but it's *hedging*, not misrouting.** Every adversarial "miss" is the correct product **plus** one extra lure-suggested product (the router never routes to only the wrong place); answers stay correct (adversarial groundedness 4.3–4.5).
+
+**Routing hardening (`2c370d6`, partial).** Hardened the OCI/ERP/EPM scope boundaries so a cloud-infra question wrapped in finance vocab routes cleanly: OCI now *claims* storing/archiving files and isolating budget/financial data into compartments; ERP/EPM *disclaim* it (durable boundary facts, not question→answer mappings). Re-ran adversarial (`EVAL_CATEGORY=adversarial`):
+- **`security-policy` lure fixed**; but **`archive-financial` (+erp) and `compartment-budget` (+epm) still hedge ~half the time** (single spot-checks landed clean — luck), and `intercompany` hedges (left alone; genuinely spans ERP+EPM).
+- **Honest conclusion: prompt-based routing has a probabilistic ceiling** — hardening shifts the odds but can't make a soft prompt deterministic, and over-fitting the wording to chase the metric is what the eval exists to prevent. The residual is harmless (right product + wasteful extra; answers correct). A *hard* guarantee needs a routing classifier or a post-route relevance gate — logged as future work. Docs commit `7993651`.
+
+---
+
+## Docs + demo polish (2026-06-01)
+
+- **`README.md` refreshed** (`7d07c6f`, pushed): corpus ~7,740 → **~3,100 chunks**; EPM per-module search tools; retrieval now 4 modes incl. the `keyword_only` baseline + tuned `hybrid_rerank` default + relevance floor; the **Evaluation section rewritten** (60-q 4-category, all-regime verdict, end-to-end quality 3.97, the honest findings incl. the n=5→n=15 corrections, the judge-snippet bug, and the routing-hedge ceiling); "what I'd do next" updated (routing classifier; eval-set grown).
+- **"Tricky routing" UI button** (`77f80a2`, deployed): a 5th sample pool of terminology lures, all **verified to route to a single correct product**, showcasing the router resisting misleading wording. Deliberately excludes the genuinely-ambiguous intercompany lure.
+- **`DEMO_SCRIPT.md` refreshed** (gitignored / local): self-correcting eval headline, the live "Tricky routing" beat, the honest routing-ceiling story, updated Q&A.
+
+**Current corpus (post-coverage-fix):** erp 947 / epm **1424** / oci 754 = **3125** chunks (both stores reconcile). EPM grew by the *Administering Planning* guide (the coverage fix).
