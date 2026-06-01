@@ -477,3 +477,26 @@ The hybrid pool **loses or ties every category — even exact_term**. Mechanism:
 **Result: adaptive at sem=1.0 strictly Pareto-dominates pure vector** — ties it on all three semantic regimes and beats it **+0.143 on exact_term (0.956, = `keyword_only`'s ceiling), zero regressions.** Mechanism: at sem=1.0 the semantic queries get α=1.0 (fusion degenerates to pure vector) while identifier queries get α=0.3 — the system has become a **dense-vs-sparse query router** that invokes BM25 only where it helps. sem=0.9 keeps fusion active everywhere: small cross edge (0.578) + adversarial tie (0.546) + exact win (0.956), single trails by 0.03 (strict 0.603 ≈ vector 0.605).
 
 **Answer to the question:** the RRF hybrid didn't show strength because the fusion was rank-only, equal-weight, and query-agnostic — on a clean corpus that only dilutes. Make fusion score-based + per-query adaptive and hybrid is ≥ vector everywhere and far better on the lexical regime. **Caveat:** this is the complementarity-poor regime (cause #1) — the win is *selective* (only exact-token queries genuinely need the sparse leg); on a noisier/multi-domain corpus the complementarity (and hybrid's margin) would be larger — that's Experiment 3 (next). Scorecards: weighted sweep `165645/170548/165735/170638`, adaptive `170728/171633/171724`. Modes stay env-toggleable, default `rrf` (production `hybrid_rerank` reranks the pool regardless, so live-answer impact is small — this is primarily an analysis/eval result).
+
+### Experiment 3: the OOV recall-rescue regime — where hybrid wins outright (2026-06-01)
+
+The fusion work above showed hybrid can match/beat vector on *ranking*, but the diagnosis said genuine recall-complementarity was near-zero (keyword uniquely rescues vector in 2/75 clean queries) because `vector_only` recall@10 was ~100% — the chunk is always in the pool, just mis-ranked. So I built the regime where dense *genuinely fails on recall*: minimal-context lookups of ultra-rare exact identifiers (df=2) the embedder can't localize. Standalone analysis (`evals/oov_slice.py`, deliberately *not* in the balanced dataset); 8 tokens confirmed vector-hostile by probing and verified as genuine domain terms (XCC, OFS_Rollup, OEP_Original, OWP_Salary, BUDGET_VERSION_ID, REFERENCE1, CCSP, KVM).
+
+**Result (n=8, `rrf` fusion):**
+
+| mode | recall@1 | recall@10 | MRR | misses |
+|---|---|---|---|---|
+| keyword_only | 100% | 100% | **1.000** | 0 |
+| vector_only | 25% | 38% | **0.275** | **5/8** |
+| hybrid (RRF) | 38% | 88% | 0.497 | 1 |
+| hybrid_rerank | 100% | 100% | **1.000** | 0 |
+
+**Dense collapses (MRR 0.275, misses 5/8); `hybrid_rerank` fully rescues to 1.000** — hybrid winning outright, the textbook case the clean eval couldn't surface. The honest "why hybrid matters" answer: when the embedder can't represent a token, only the sparse leg has recall, and reranking the sparse+dense union recovers it completely.
+
+**Two mechanism findings from the per-query ranks:**
+1. **RRF is a *poor* fusion for OOV recall (0.497).** It only partially recovers because RRF penalizes documents found by a *single* leg — exactly the OOV case (only BM25 finds the token). `reference1` was BM25 rank-1 yet RRF dropped it out of the top-10; `ofs_rollup` / `oep_original` / `budget_version_id` were rescued but mis-ranked deep (5 / 6 / 9). **Reranking the union ≫ RRF-ing the union** when only one retriever finds the doc.
+2. **The regex adaptive router has an acronym blind spot.** With `HYBRID_FUSION=adaptive`, underscore tokens route to BM25 and rank #1, but acronym OOV (`CCSP`) routes to vector and is missed — adaptive first-stage *under*-recovers vs query-agnostic RRF here. This is why a production router should weight by token IDF / document-frequency (catches rare acronyms), not a surface regex.
+
+**Honest caveats:** (a) adding even light context can rescue vector on rare tokens — bare `XCC` missed, but "XCC flexfield code" was found at rank 1; the collapse is specific to *context-poor* exact lookups. (b) This regime is *scarce* on this clean corpus (~3 clean misses per ~16 ultra-rare tokens probed); voyage-3-large embeds most rare tokens fine. On a noisier / multi-domain corpus the OOV rate — and hybrid's margin — would be far larger.
+
+**Cross-experiment synthesis (the interview through-line):** hybrid's value is regime-specific, and the *fusion mechanism* decides whether it's captured. (1) clean/semantic — vector ≈ rerank, RRF dilutes; (2) exact-token *ranking* — score-based/adaptive fusion or rerank fixes it; (3) OOV *recall* — only the sparse leg has recall, and reranking the union recovers it fully (vector 0.275 → rerank 1.000). Production `hybrid_rerank` (sparse+dense pool → cross-encoder rerank) is the one architecture that wins all three — the empirical case for it, and for hybrid retrieval generally on data messier than this corpus.
