@@ -34,21 +34,27 @@ log = logging.getLogger(__name__)
 # Reciprocal Rank Fusion constant (standard value).
 RRF_K = 60
 
-# Hybrid fusion method, env-toggleable for the A/B (cause-#3 experiment: is naive
-# rank-only RRF the weak link, or is it the corpus?). "rrf" (default) = Reciprocal
-# Rank Fusion (rank-only, equal weight). "weighted" = convex combination of per-leg
-# min-max-normalized scores: HYBRID_ALPHA*vector + (1-HYBRID_ALPHA)*bm25 — unlike
-# RRF this preserves score *magnitude* and lets the stronger (vector) leg outweigh.
-HYBRID_FUSION = os.getenv("HYBRID_FUSION", "rrf").lower()
+# Hybrid fusion method, env-toggleable. "rrf" = Reciprocal Rank Fusion (rank-only,
+# equal weight). "weighted" = convex combination of per-leg min-max-normalized scores
+# (HYBRID_ALPHA*vector + (1-HYBRID_ALPHA)*bm25), preserving score *magnitude*.
+# "adaptive" (DEFAULT) = per-query weighted fusion (see the alpha config below).
+# Adaptive is the default because it gives hybrid_rerank's candidate pool the best of
+# both: a vector pool for semantic queries — recovering the cross MRR that a plain RRF
+# hybrid pool diluted (hybrid_rerank cross 0.475 -> 0.516, ~the tuned vector-pool level)
+# — and a BM25-tilted pool for exact-token/identifier queries (the OOV coverage that
+# motivated pool=hybrid). A/B + rationale in TEST_LOG (2026-06-01).
+HYBRID_FUSION = os.getenv("HYBRID_FUSION", "adaptive").lower()
 HYBRID_ALPHA = float(os.getenv("HYBRID_ALPHA", "0.5"))  # weight on the vector leg
 
 # For HYBRID_FUSION="adaptive": route alpha per query by lexicality. An identifier-
 # like query token (snake_case / dotted multi-part — OEP_Working, VM.Standard.E4.Flex,
 # AP_INVOICE_LINES_ALL) signals an exact-token lookup where BM25 wins, so use a
-# BM25-leaning alpha; otherwise a vector-leaning alpha. (A production version would
-# weight by token IDF / document-frequency; this regex is a high-precision proxy.)
+# BM25-leaning alpha; otherwise a vector-leaning alpha. Default sem=1.0: semantic
+# queries become *pure vector* (so the adaptive pool matches the tuned vector pool on
+# the semantic regimes) while identifier queries still get BM25. (A production router
+# would weight by token IDF; the regex is a high-precision proxy — see HYBRID_ADAPTIVE_SIGNAL.)
 HYBRID_ALPHA_LEXICAL = float(os.getenv("HYBRID_ALPHA_LEXICAL", "0.3"))
-HYBRID_ALPHA_SEMANTIC = float(os.getenv("HYBRID_ALPHA_SEMANTIC", "0.8"))
+HYBRID_ALPHA_SEMANTIC = float(os.getenv("HYBRID_ALPHA_SEMANTIC", "1.0"))
 
 # How the adaptive router decides a query is "lexical" (→ BM25-leaning α):
 #   "regex" — identifier-like token structure (default; offline, no DB hit).

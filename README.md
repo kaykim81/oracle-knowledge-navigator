@@ -47,7 +47,7 @@ Enterprise Oracle knowledge is fragmented across product lines — each with its
 
 - The **orchestrator** connects to all three MCP servers, namespaces their tools (`erp_search_docs`, `oci_search_docs`, …), and runs a Claude tool-use loop: Claude picks the product(s), the orchestrator forwards each call, and the loop ends with a cited answer. The answer **streams token-by-token** over SSE while every tool call is captured in a **trace** the UI renders — federation made visible — alongside a **per-question cost panel** (Claude spend + cache-hit %; Voyage retrieval cost excluded).
 - Each **MCP server** is product-scoped and identical in shape (one factory, `shared/mcp_server.py`); only its corpus, scope description, and port differ. Per-collection isolation means a server only ever returns its own product's chunks. EPM goes one level finer: its one collection holds three distinct module guides (Planning, Financial Consolidation & Close, Narrative Reporting), so it exposes **per-module search tools** (`epm_search_planning` / `_fcc` / `_narrative`, each scoped by source doc) — a Planning question structurally can't surface FCC chunks.
-- **Retrieval** (`shared/retrieval.py`) modes: `vector_only` (Qdrant, voyage-3-large), `hybrid` (vector + SQLite FTS5 BM25 fused with Reciprocal Rank Fusion), `hybrid_rerank` (the **production default** — candidates reranked with Voyage rerank-2 over a hybrid vector+BM25/RRF candidate pool, with each chunk's section path fed to the reranker), and `keyword_only` (pure BM25, an eval-only baseline for the component ablation). A relevance floor lets the agent abstain when nothing scores well rather than answer from off-topic chunks.
+- **Retrieval** (`shared/retrieval.py`) modes: `vector_only` (Qdrant, voyage-3-large), `hybrid` (vector + SQLite FTS5 BM25, fused per-query by **adaptive** weighting — vector for semantic queries, BM25 for exact-token queries; RRF and fixed-weight fusion stay env-selectable), `hybrid_rerank` (the **production default** — candidates from that adaptive vector+BM25 pool reranked with Voyage rerank-2, with each chunk's section path fed to the reranker), and `keyword_only` (pure BM25, an eval-only baseline for the component ablation). A relevance floor lets the agent abstain when nothing scores well rather than answer from off-topic chunks.
 - Only the **UI** is public (joined to both the internal network and Traefik's); everything else stays on an internal Docker network.
 
 ## Quick start
@@ -85,20 +85,20 @@ The eval is the part I'd most want to defend in the interview, so it's deliberat
 
 Dataset: **60 hand-built questions, balanced 15/15/15/15** — single-product, cross-product (ERP↔EPM), adversarial (terminology lures), and exact-term (member names / codes / acronyms — the BM25-favorable regime). The `retrieval_eval` adds a `keyword_only` (BM25) mode so the component ablation is *measured*, not inferred.
 
-**The honest headline: no single retriever wins everywhere — it's regime-dependent, and no mode is strictly dominant.** vector owns semantic cross-product, **keyword owns exact-term** (the regime-A lexical case), and the reranker owns adversarial and ties single — so the reranker ships as the default because it is the most robust **all-rounder** (never the worst in any regime), *not* because it wins everywhere. Retrieval, by category (strict section bar; exact-term on the TEXT bar, since its tokens live in body text not headings; `hybrid_rerank` shown for the deployed `pool=hybrid` — recall@1 / MRR):
+**The honest headline: no single retriever wins everywhere — it's regime-dependent, and no mode is strictly dominant.** vector owns semantic cross-product, **keyword owns exact-term** (the regime-A lexical case), and the reranker owns adversarial and ties single — so the reranker ships as the default because it is the most robust **all-rounder** (never the worst in any regime), *not* because it wins everywhere. Retrieval, by category (strict section bar; exact-term on the TEXT bar, since its tokens live in body text not headings; `hybrid` = the default per-query **adaptive** fusion, `hybrid_rerank` = the deployed default (adaptive pool + rerank) — recall@1 / MRR):
 
 | category (n)        | keyword_only  | vector_only     | hybrid        | hybrid_rerank   |
 |---------------------|---------------|-----------------|---------------|-----------------|
-| single (15)         | 60% / 0.673   | 67% / 0.744     | 60% / 0.706   | **67% / 0.747** |
-| cross (30)          | 30% / 0.416   | **43% / 0.569** | 27% / 0.475   | 37% / 0.475     |
-| adversarial (15)    | 33% / 0.436   | 40% / 0.539     | 33% / 0.506   | **53% / 0.591** |
-| exact_term (15)     | **93% / 0.956** | 73% / 0.813   | 87% / 0.908   | 87% / 0.922     |
+| single (15)         | 60% / 0.673   | 67% / 0.744     | 67% / 0.744   | **67% / 0.747** |
+| cross (30)          | 30% / 0.416   | **43% / 0.569** | **43% / 0.569** | 40% / 0.514   |
+| adversarial (15)    | 33% / 0.436   | 40% / 0.539     | 40% / 0.539   | **53% / 0.600** |
+| exact_term (15)     | **93% / 0.956** | 73% / 0.813   | **93% / 0.956** | 87% / 0.922   |
 
 - **Semantic (single/cross) → vector wins**, BM25 weakest.
 - **Exact-term (regime A) → BM25 wins outright** (keyword 0.956 vs vector 0.813): on unique identifiers — `VM.Standard.E4.Flex`, `AP_INVOICE_LINES_ALL`, `OEP_Forecast` — the embedder grabs a *confusable sibling*; BM25 matches the exact token. Vector is the **worst** first-stage here, and even the reranker (0.922) trails keyword.
 - **Adversarial → rerank wins** — semantic precision cuts through terminology lures.
-- **Naive `hybrid` (RRF) underperforms in every regime** — fusing the weaker leg at equal weight dilutes the stronger.
-- **No mode is strictly dominant** — reranker wins single+adversarial, vector wins cross, keyword wins exact-term. The reranker ships as the default as the **robust all-rounder** (never worst in any regime), not because it wins everywhere. It draws candidates from a **hybrid** vector+BM25 pool by default; an A/B (TEST_LOG) shows a *vector*-only pool scores slightly higher on cross/exact-term — the hybrid pool is the deployed default despite the A/B favoring vector.
+- **The default `hybrid` now uses per-query *adaptive* fusion** — it routes semantic queries to vector and exact-token queries to BM25, so it **matches the best leg in every regime** (ties vector on single/cross, ties keyword on exact-term). Naive equal-weight RRF, by contrast, diluted *below* the stronger leg everywhere (see TEST_LOG).
+- **`hybrid_rerank` (production default) reranks that adaptive sparse+dense pool** — it wins adversarial (0.600) and edges single, and the adaptive pool recovers the cross MRR a naive RRF pool diluted (0.475 → 0.514). Its strongest case is **answer quality and set-recall** (multi-doc eval: recall@10 0.791 / nDCG 0.701, best of all modes), not the single-target section bar, where it ~ties vector.
 
 End-to-end (LLM-judged), `hybrid_rerank` led answer quality in every category — overall 3.97 vs vector 3.79 / hybrid 3.66 (out of 5), groundedness ~4.0+. *(These figures predate the 2026-06-01 exact_term reframe + `pool=hybrid` flip and are pending a judge re-run against the new questions.)*
 

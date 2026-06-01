@@ -539,3 +539,19 @@ The diagnosis named the **single-target metric** (recall@1 / MRR vs *one* keywor
 **This closes cause #2 with a measurement, not an argument:** the metric, not the retriever, was hiding hybrid. Single-target (one relevant chunk → fusion dilutes) and set-recall (many relevant chunks → the union covers complementary docs) give **opposite verdicts on the identical system**. And set-recall is the metric that matters for RAG — the LLM needs the *complete* set of relevant context, not just the single best chunk — so `hybrid_rerank`'s win here is the decision-relevant one (and lines up with its end-to-end answer-quality lead).
 
 **Synthesis — hybrid's value depends on two axes.** The **regime** (semantic / exact-term / OOV / adversarial) *and* the **metric** (single-target vs set-recall). The single-target balanced eval made RRF hybrid look strictly worse than vector; the set-recall metric shows hybrid > both legs and rerank-the-union best. *Caveat:* pooled-judgment gold has pooling bias (gold drawn from the systems compared) — standard IR practice, mitigated by pooling all four modes. Cost ~$0.6 (45 single-call judgments).
+
+### Promoting adaptive fusion to the production default (2026-06-01)
+
+With the fusion + pool experiments converged, I A/B'd the candidate pool's effect on the *shipped* `hybrid_rerank` — it reranks the pool, so the pool's fusion could be moot (my initial guess) or not. **It is not moot** — and adaptive recovers the regression the plain RRF-hybrid pool caused:
+
+| `hybrid_rerank` candidate pool | single | cross | adversarial | exact_term | strict-all |
+|---|---|---|---|---|---|
+| pool=vector (original tuned A/B winner) | 0.747 | 0.515 | 0.617 | 0.933 | 0.598 |
+| pool=hybrid + rrf (prior default) | 0.747 | 0.475 | 0.591 | 0.922 | 0.572 |
+| **pool=hybrid + adaptive sem1.0 (new default)** | 0.747 | **0.516** | 0.600 | 0.922 | **0.595** |
+
+Mechanism: adaptive at sem=1.0 makes the pool *pure vector for semantic queries* (recovering the cross/strict MRR an RRF pool diluted) while keeping *BM25 for exact-token/identifier queries* (the OOV coverage that motivated pool=hybrid) — ~the tuned vector-pool's numbers **plus** BM25 coverage. This largely retires the earlier "we shipped the weaker A/B arm" caveat (0.595 ≈ pool=vector 0.598, vs the prior rrf 0.572).
+
+**Promoted to default** (`HYBRID_FUSION=adaptive`, `HYBRID_ALPHA_SEMANTIC=1.0`; deployed to the 3 MCP servers, runtime verified; scorecard `192424Z`). The standalone `hybrid` mode is now Pareto-over-vector too — it ties vector on single/cross and keyword on exact-term (a per-query router to the best leg).
+
+**Kept `signal=regex` / `df_max=5` (not `both`/idf).** A/B: the signal is *immaterial* to the shipped `hybrid_rerank` (regex vs both — cross 0.514 vs 0.516, identical elsewhere), and `both`/idf is net-*negative* on the `hybrid` mode (adversarial 0.539 → 0.486 via the lure confound). regex is false-positive-free; `idf`/`both` stay opt-in for OOV-heavy workloads. Correction worth noting: my "the reranker makes the pool moot" prediction was wrong — running the A/B (cross +0.041 for hybrid_rerank) beat the armchair reasoning.
