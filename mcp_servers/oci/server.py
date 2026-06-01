@@ -16,18 +16,23 @@ SEARCH_DOCS = """Search Oracle Cloud Infrastructure (OCI) documentation; return 
 
 IN SCOPE: Oracle Cloud Infrastructure — Compute (instances, shapes, images),
 Networking (VCNs, subnets, gateways, security rules, BYOIP), Object Storage (buckets,
-objects, tiers, replication), and IAM (users, groups, **policies that control which
-users can access which resources**, **compartments that organize any cloud resources —
-including ones holding financial data — for access control and isolation**, federation).
+objects, **storage tiers including Archive for storing/archiving any files — including
+financial statements or reports — at low cost**, replication), and IAM (users, groups,
+**policies that control which users can access which resources**, **compartments that
+isolate any data — including budget or financial data — into its own space with separate
+access control**, federation).
 
 OUT OF SCOPE: This server does NOT cover Oracle Fusion Cloud ERP (financials) or
 Oracle EPM (planning, consolidation, narrative reporting). For those, use the
 appropriate MCP server instead.
 
-BOUNDARY: access control is OCI even when the data being protected is financial.
-A question about **compartments**, or about a **policy governing which users can
-access resources**, is OCI IAM — the word "financial" describes the data, not the
-product. ERP/EPM own the financial *content*; OCI owns the cloud *access control* around it.
+BOUNDARY: the cloud *infrastructure* around data is OCI even when the data is financial
+or budget content — the subject of the data doesn't change the product. **Storing or
+archiving files (financial statements, reports, anything) in Object Storage is OCI.**
+**Isolating any data — including budget data — into its own compartment with separate
+access is OCI IAM.** A **policy governing which users can access which resources** is OCI
+IAM. ERP/EPM own the financial *content and processes*; OCI owns the cloud *storage,
+isolation, and access control* around it.
 
 Args:
     query: A natural-language question about OCI infrastructure.

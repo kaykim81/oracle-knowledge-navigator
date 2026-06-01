@@ -26,7 +26,11 @@ BOUNDARY (do not be fooled by shared vocabulary): this server owns *General Ledg
 journals, allocations, and currency *revaluation* of balances. But **consolidation
 journals**, **allocation rules in Planning**, and **translating balances to a parent
 currency during the financial close** are EPM, not ERP — even though the words
-"journal", "allocation", and "translate" appear here too.
+"journal", "allocation", and "translate" appear here too. And **storing or archiving
+financial statements/reports in cloud storage**, or a **policy controlling which users
+can access cloud resources**, is OCI infrastructure, not ERP — ERP produces the
+financial *content*; OCI stores it and controls access to the cloud resources. "Financial"
+describing the data does not make an infrastructure question ERP.
 
 Args:
     query: A natural-language question about Oracle Fusion ERP.

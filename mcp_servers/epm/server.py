@@ -19,7 +19,11 @@ INSTRUCTIONS = (
     "Planning, Financial Consolidation and Close (FCC), and Narrative Reporting. "
     "Each has its own module-scoped search tool — pick the one the question is about; "
     "a procedure from one module often does not apply to another. Use this server for "
-    "EPM questions only; it does not cover Oracle Fusion ERP financials or OCI."
+    "EPM questions only; it does not cover Oracle Fusion ERP financials or OCI. In "
+    "particular, storing or archiving data/reports in cloud storage, or isolating budget "
+    "data in a cloud compartment with access control, is OCI infrastructure — not EPM. "
+    "EPM owns the planning/budgeting/consolidation content, not where it is stored or who "
+    "can access the cloud resource holding it."
 )
 
 # Args/Returns are identical across the module tools; defined once and appended.
