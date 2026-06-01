@@ -500,3 +500,23 @@ The fusion work above showed hybrid can match/beat vector on *ranking*, but the 
 **Honest caveats:** (a) adding even light context can rescue vector on rare tokens — bare `XCC` missed, but "XCC flexfield code" was found at rank 1; the collapse is specific to *context-poor* exact lookups. (b) This regime is *scarce* on this clean corpus (~3 clean misses per ~16 ultra-rare tokens probed); voyage-3-large embeds most rare tokens fine. On a noisier / multi-domain corpus the OOV rate — and hybrid's margin — would be far larger.
 
 **Cross-experiment synthesis (the interview through-line):** hybrid's value is regime-specific, and the *fusion mechanism* decides whether it's captured. (1) clean/semantic — vector ≈ rerank, RRF dilutes; (2) exact-token *ranking* — score-based/adaptive fusion or rerank fixes it; (3) OOV *recall* — only the sparse leg has recall, and reranking the union recovers it fully (vector 0.275 → rerank 1.000). Production `hybrid_rerank` (sparse+dense pool → cross-encoder rerank) is the one architecture that wins all three — the empirical case for it, and for hybrid retrieval generally on data messier than this corpus.
+
+### IDF-based adaptive router — fixing the acronym blind spot, and a confound (2026-06-01)
+
+Experiment 3 exposed the regex router's blind spot: it gates BM25 off for acronym OOV (`CCSP` missed, since there's no underscore/dot to match). The principled fix is to route on token *rarity* (IDF), not surface structure. Added a selectable router signal (`HYBRID_ADAPTIVE_SIGNAL=regex|idf|both`, threshold `HYBRID_LEX_DF_MAX`): `idf` flags a query lexical if its rarest content token's document frequency ≤ threshold; `both` = regex OR idf. (Backed by `db.content_tokens` + `db.token_doc_freq`.)
+
+**It fixes the OOV blind spot (the goal).** On the OOV slice with `idf`/`both`, the adaptive `hybrid` rescues all 5 vector misses — `CCSP`/`reference1` (regex → None) jump to rank 1, matching the reranker. Acronym blind spot closed.
+
+**But IDF is a noisy router signal — it cost adversarial robustness (`hybrid` MRR 0.539 → 0.486).** Two confounds, found by tracing the flagged queries:
+1. **Off-domain lure words (product-scoped IDF).** The adversarial lures wrap an OCI question in finance vocab; `financial` is df=1 *in OCI* → flagged → routed to BM25 → matches the lure. **Fixed by switching to *global* IDF:** `financial` is globally common (df=456) so it's no longer flagged, while a genuinely distinctive token (`XCC`) is rare *everywhere* (df=2).
+2. **Ordinary-but-rare words (global IDF, residual).** Even global IDF still flags `isolate` (df=4) and `hosting` (df=2) — ordinary words simply uncommon in a ~3k-chunk corpus. **No df threshold separates them from real identifiers** (`XCC`/`CCSP`/`reference1` sit at df=2–3, right among the ordinary rare words); df_max=2 trims adversarial damage to 1/15 but then misses `reference1` (df=3).
+
+| `hybrid` (sem=1.0) | single | cross | adversarial | exact_term | OOV acronyms |
+|---|---|---|---|---|---|
+| regex (default) | 0.744 | 0.569 | **0.539** | 0.956 | misses CCSP |
+| both (product-idf) | 0.744 | 0.583 | 0.492 | 0.956 | catches all |
+| both (global-idf) | 0.744 | 0.583 | 0.486 | 0.956 | catches all |
+
+**Verdict.** The regex *structural* signal stays the better default — false-positive-free on the balanced eval (identifier structure is unambiguous; ordinary words have no underscores/dots), Pareto-dominant at sem=1.0. `idf`/`both` are env options that buy rare-acronym recall (the OOV regime) at an adversarial-precision cost. The clean separator would combine *orthography* (all-caps / alphanumeric identifier shape — distinguishes `XCC` from `isolate`) with rarity, or a learned query classifier — pure DF is insufficient because in a small corpus, ordinariness and distinctiveness both look "rare."
+
+**Through-line.** Every layer of this system is regime-dependent — the retriever (vector vs keyword), the fusion (rrf vs weighted vs adaptive), and now the router *signal* itself (structure vs rarity). Each choice trades precision in one regime for recall in another; the robust production answer is reranking a sparse+dense pool with the router tuned to the expected query mix. Defaults stay `rrf` / `regex` (no live change); `idf`/`both` documented for OOV-heavy deployments. Scorecards: global-idf `175750` (both) / `175841` (idf); product-scoped `175032`/`175219` (superseded by global).

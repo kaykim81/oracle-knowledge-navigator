@@ -50,6 +50,14 @@ HYBRID_ALPHA = float(os.getenv("HYBRID_ALPHA", "0.5"))  # weight on the vector l
 HYBRID_ALPHA_LEXICAL = float(os.getenv("HYBRID_ALPHA_LEXICAL", "0.3"))
 HYBRID_ALPHA_SEMANTIC = float(os.getenv("HYBRID_ALPHA_SEMANTIC", "0.8"))
 
+# How the adaptive router decides a query is "lexical" (→ BM25-leaning α):
+#   "regex" — identifier-like token structure (default; offline, no DB hit).
+#   "idf"   — rarest content token's document frequency <= HYBRID_LEX_DF_MAX
+#             (catches rare acronyms like XCC/CCSP that the regex structure misses).
+#   "both"  — regex OR idf (most complete: structure + rarity).
+HYBRID_ADAPTIVE_SIGNAL = os.getenv("HYBRID_ADAPTIVE_SIGNAL", "regex").lower()
+HYBRID_LEX_DF_MAX = int(os.getenv("HYBRID_LEX_DF_MAX", "5"))
+
 # How many candidates to send to the reranker before taking top_k.
 RERANK_CANDIDATES = int(os.getenv("RERANK_CANDIDATES", "30"))
 
@@ -165,13 +173,38 @@ _IDENTIFIER_RE = re.compile(r"\w+_\w+|\w+(?:\.\w+){2,}")
 
 
 def _looks_lexical(query: str) -> bool:
-    """True if the query carries an identifier-like exact token (favor BM25)."""
+    """Structural signal: query carries an identifier-like token (snake_case / dotted)."""
     return bool(_IDENTIFIER_RE.search(query))
+
+
+def _has_rare_token(query: str) -> bool:
+    """IDF signal: the query's rarest content token is globally rare (<= HYBRID_LEX_DF_MAX).
+
+    Uses *global* (corpus-wide) document frequency — the actual IDF — not product-
+    scoped, on purpose. The adversarial lures exposed a confound: an off-domain lure
+    word ("financial" in an OCI query) is rare *in that product* but common globally,
+    so product-scoped DF wrongly flagged it lexical and routed it to BM25, matching
+    the lure. A genuinely distinctive token (XCC) is rare *everywhere*; a lure isn't.
+    """
+    tokens = db.content_tokens(query)
+    if not tokens:
+        return False
+    conn = _get_db()
+    return min(db.token_doc_freq(conn, t) for t in tokens) <= HYBRID_LEX_DF_MAX
+
+
+def _is_lexical_query(query: str) -> bool:
+    """Combine the configured router signal(s) into a lexical/semantic decision."""
+    if HYBRID_ADAPTIVE_SIGNAL == "regex":
+        return _looks_lexical(query)
+    if HYBRID_ADAPTIVE_SIGNAL == "idf":
+        return _has_rare_token(query)
+    return _looks_lexical(query) or _has_rare_token(query)  # "both"
 
 
 def _adaptive_alpha(query: str) -> float:
     """Per-query vector-leg weight: BM25-leaning for lexical queries, else vector-leaning."""
-    return HYBRID_ALPHA_LEXICAL if _looks_lexical(query) else HYBRID_ALPHA_SEMANTIC
+    return HYBRID_ALPHA_LEXICAL if _is_lexical_query(query) else HYBRID_ALPHA_SEMANTIC
 
 
 async def retrieve(
@@ -363,6 +396,7 @@ def _selftest() -> None:
     assert _looks_lexical("What is the OEP_Forecast scenario member?"), "snake_case ID not detected"
     assert not _looks_lexical("How do I create a VCN and subnet in OCI Networking?"), "semantic query misflagged"
     assert not _looks_lexical("What is the difference between security lists and network security groups?"), "semantic query misflagged"
+    # default signal is "regex" -> these stay offline (no DB hit); idf/both tested via eval
     assert _adaptive_alpha("OEP_Forecast member") == HYBRID_ALPHA_LEXICAL
     assert _adaptive_alpha("how do I reverse a journal entry") == HYBRID_ALPHA_SEMANTIC
     print("OK: adaptive lexicality router (identifier queries -> BM25-leaning)")

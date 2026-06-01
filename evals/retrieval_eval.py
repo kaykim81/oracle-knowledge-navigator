@@ -130,7 +130,8 @@ def _rerank_config() -> str:
         f"min_score={retrieval.MIN_RERANK_SCORE}, "
         f"hybrid_fusion={retrieval.HYBRID_FUSION}"
         f"(alpha={retrieval.HYBRID_ALPHA}, "
-        f"lex={retrieval.HYBRID_ALPHA_LEXICAL}, sem={retrieval.HYBRID_ALPHA_SEMANTIC})"
+        f"lex={retrieval.HYBRID_ALPHA_LEXICAL}, sem={retrieval.HYBRID_ALPHA_SEMANTIC}, "
+        f"signal={retrieval.HYBRID_ADAPTIVE_SIGNAL}, df_max={retrieval.HYBRID_LEX_DF_MAX})"
     )
 
 

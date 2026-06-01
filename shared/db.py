@@ -146,6 +146,15 @@ that the their to was what when where which who why will with you your me we our
 """.split())
 
 
+def content_tokens(query: str) -> list[str]:
+    r"""Content words of a query: lowercased ``\w+`` tokens, stopwords + 1-char dropped.
+
+    Shared by the BM25 query builder and the IDF-based adaptive fusion router so
+    both reason over the same tokens.
+    """
+    return [t for t in re.findall(r"\w+", query.lower()) if t not in _STOPWORDS and len(t) > 1]
+
+
 def _fts_query(query: str) -> str:
     """Build a safe FTS5 MATCH string: content words quoted, OR-ed together.
 
@@ -154,9 +163,28 @@ def _fts_query(query: str) -> str:
     leg matches on content, not on "how"/"a"/"in"; if a query is all stopwords we
     fall back to every token. BM25 ranking + RRF + rerank handle precision.
     """
-    tokens = re.findall(r"\w+", query.lower())
-    content = [t for t in tokens if t not in _STOPWORDS and len(t) > 1]
-    return " OR ".join(f'"{t}"' for t in (content or tokens))
+    content = content_tokens(query)
+    if content:
+        return " OR ".join(f'"{t}"' for t in content)
+    return " OR ".join(f'"{t}"' for t in re.findall(r"\w+", query.lower()))
+
+
+def token_doc_freq(conn: sqlite3.Connection, token: str, product: Product | None = None) -> int:
+    """Number of chunks whose text contains ``token`` (FTS-tokenized), product-scoped.
+
+    Used by the IDF-based adaptive fusion router: a query whose *rarest* content
+    token has low document frequency is an exact/lexical lookup (favor BM25), since
+    a rare high-IDF token is exactly what a dense embedder tends to paraphrase-miss.
+    """
+    sql = (
+        "SELECT count(*) FROM chunks_fts JOIN chunks c ON c.rowid = chunks_fts.rowid "
+        "WHERE chunks_fts MATCH ?"
+    )
+    params: list = [f'"{token}"']
+    if product is not None:
+        sql += " AND c.product = ?"
+        params.append(product)
+    return conn.execute(sql, params).fetchone()[0]
 
 
 def search_bm25(
@@ -285,6 +313,12 @@ def _smoke_test() -> None:
     none_match = search_bm25(conn, "journal supplier", product="erp", doc_ids=["erp-nope"])
     assert none_match == [], "doc_ids filter should exclude non-matching docs"
     print("OK: doc_ids filter scopes within a product")
+
+    # content_tokens + token_doc_freq feed the IDF adaptive fusion router
+    assert content_tokens("How is a journal entry reversed?") == ["journal", "entry", "reversed"]
+    assert token_doc_freq(conn, "journal") == 1 and token_doc_freq(conn, "supplier", product="erp") == 1
+    assert token_doc_freq(conn, "supplier", product="oci") == 0 and token_doc_freq(conn, "zzznope") == 0
+    print("OK: content_tokens + token_doc_freq (IDF router inputs)")
 
     # the plan's definition-of-done query shape works
     rows = list(conn.execute(

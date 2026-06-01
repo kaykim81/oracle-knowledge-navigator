@@ -70,7 +70,8 @@ def report(ranks: dict[str, list[int | None]]) -> None:
     print(
         f"hybrid fusion: {retrieval.HYBRID_FUSION} "
         f"(alpha={retrieval.HYBRID_ALPHA}, lex={retrieval.HYBRID_ALPHA_LEXICAL}, "
-        f"sem={retrieval.HYBRID_ALPHA_SEMANTIC})\n"
+        f"sem={retrieval.HYBRID_ALPHA_SEMANTIC}, signal={retrieval.HYBRID_ADAPTIVE_SIGNAL}, "
+        f"df_max={retrieval.HYBRID_LEX_DF_MAX})\n"
     )
     hdr = f"{'mode':14}" + "".join(f"{'recall@'+str(k):>10}" for k in KS) + f"{'MRR':>8}{'misses':>8}"
     print(hdr)
