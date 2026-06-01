@@ -46,8 +46,8 @@ Enterprise Oracle knowledge is fragmented across product lines — each with its
 ```
 
 - The **orchestrator** connects to all three MCP servers, namespaces their tools (`erp_search_docs`, `oci_search_docs`, …), and runs a Claude tool-use loop: Claude picks the product(s), the orchestrator forwards each call, and the loop ends with a cited answer. The answer **streams token-by-token** over SSE while every tool call is captured in a **trace** the UI renders — federation made visible — alongside a **per-question cost panel** (Claude spend + cache-hit %; Voyage retrieval cost excluded).
-- Each **MCP server** is product-scoped and identical in shape (one factory, `shared/mcp_server.py`); only its corpus, scope description, and port differ. Per-collection isolation means a server only ever returns its own product's chunks.
-- **Retrieval** (`shared/retrieval.py`) has three modes: `vector_only` (Qdrant, voyage-3-large), `hybrid` (vector + SQLite FTS5 BM25 fused with Reciprocal Rank Fusion), and `hybrid_rerank` (hybrid candidates reranked with Voyage rerank-2).
+- Each **MCP server** is product-scoped and identical in shape (one factory, `shared/mcp_server.py`); only its corpus, scope description, and port differ. Per-collection isolation means a server only ever returns its own product's chunks. EPM goes one level finer: its one collection holds three distinct module guides (Planning, Financial Consolidation & Close, Narrative Reporting), so it exposes **per-module search tools** (`epm_search_planning` / `_fcc` / `_narrative`, each scoped by source doc) — a Planning question structurally can't surface FCC chunks.
+- **Retrieval** (`shared/retrieval.py`) modes: `vector_only` (Qdrant, voyage-3-large), `hybrid` (vector + SQLite FTS5 BM25 fused with Reciprocal Rank Fusion), `hybrid_rerank` (the **production default** — candidates reranked with Voyage rerank-2; tuned to rerank a vector pool with each chunk's section path fed to the reranker), and `keyword_only` (pure BM25, an eval-only baseline for the component ablation). A relevance floor lets the agent abstain when nothing scores well rather than answer from off-topic chunks.
 - Only the **UI** is public (joined to both the internal network and Traefik's); everything else stays on an internal Docker network.
 
 ## Quick start
@@ -62,7 +62,7 @@ cp .env.example .env          # then edit: add ANTHROPIC_API_KEY and VOYAGE_API_
                               # (the Traefik/basic-auth vars are only needed for public deploy)
 
 docker compose up -d --build  # qdrant, 3 MCP servers, orchestrator, UI
-docker compose run --rm ingestion   # one-time: fetch → chunk → embed → write (~7,740 chunks)
+docker compose run --rm ingestion   # one-time: fetch → chunk → embed → write (~3,100 chunks)
 ```
 
 The UI is on port 8501 (behind Traefik in production; map it locally to browse directly). Smoke-test the agent without the UI:
@@ -80,32 +80,42 @@ Most modules also have a CLI smoke test (e.g. `python -m shared.retrieval --help
 
 The eval is the part I'd most want to defend in the interview, so it's deliberately rigorous and honest. Full methodology and findings: [TEST_LOG.md](TEST_LOG.md). Two levels:
 
-1. **Retrieval-level** (`evals/retrieval_eval.py`) — compares the three modes directly on `retrieve()`, no agent, no judge. Reports recall@k and MRR under two relevance bars (keyword anywhere = lenient; keyword in the *section path* = strict). Near-free, isolates exactly what the modes change.
+1. **Retrieval-level** (`evals/retrieval_eval.py`) — compares the retrieval modes directly on `retrieve()`, no agent, no judge. Reports recall@k and MRR under two relevance bars (keyword anywhere = lenient; keyword in the *section path* = strict). Near-free, isolates exactly what the modes change.
 2. **End-to-end** (`evals/runner.py`) — queries the orchestrator once per mode and scores answers with an LLM-as-judge (Sonnet 4.6 over the Batches API) on correctness / groundedness / citation, plus routing accuracy and latency.
 
-Dataset: 45 hand-built questions — 30 single-product, 10 cross-product (ERP↔EPM), 5 adversarial (terminology lures).
+Dataset: **60 hand-built questions, balanced 15/15/15/15** — single-product, cross-product (ERP↔EPM), adversarial (terminology lures), and exact-term (member names / codes / acronyms — the BM25-favorable regime). The `retrieval_eval` adds a `keyword_only` (BM25) mode so the component ablation is *measured*, not inferred.
 
-**The honest headline: mode value is input-dependent, and the aggregate hides it.** Broken out by category (retrieval, strict section bar — recall@1 / MRR):
+**The honest headline: no single first-stage retriever wins everywhere — it's regime-dependent — and the tuned reranker is the only mode that wins or ties every regime.** Retrieval, by category (strict section bar; exact-term on the TEXT bar, since its tokens live in body text not headings — recall@1 / MRR):
 
-| category (n)      | vector_only   | hybrid            | hybrid_rerank     |
-|-------------------|---------------|-------------------|-------------------|
-| single (30)       | 87% / 0.933   | 70% / 0.833       | 87% / **0.933**   |
-| cross (20)        | 60% / 0.714   | **65% / 0.757**   | 35% / 0.540       |
-| adversarial (5)   | 40% / 0.533   | 40% / 0.567       | **80% / 0.800**   |
+| category (n)        | keyword_only  | vector_only     | hybrid        | hybrid_rerank   |
+|---------------------|---------------|-----------------|---------------|-----------------|
+| single (15)         | 60% / 0.673   | **67% / 0.744** | 60% / 0.706   | 67% / **0.747** |
+| cross (30)          | 30% / 0.416   | **43% / 0.569** | 27% / 0.475   | 40% / 0.515     |
+| adversarial (15)    | 33% / 0.436   | 40% / 0.539     | 33% / 0.506   | **53% / 0.617** |
+| exact_term (15)     | 93% / 0.956   | 87% / 0.906     | 93% / 0.942   | **100% / 1.000**|
 
-- **Adversarial → rerank wins decisively** (recall@1 doubles, 40% → 80%): when terminology misleads, the reranker's semantic precision surfaces the right section.
-- **Cross-product → hybrid wins** (MRR 0.757 > 0.714): the BM25 leg catches specific cross-domain sections.
-- **Easy single-product → vector already saturates**; hybrid's extra candidates add RRF noise, rerank cleans it back to vector's level.
+- **Semantic (single/cross) → vector wins**, BM25 is weakest.
+- **Exact-term → BM25 *edges* vector** (it nails member names/codes the embedder paraphrase-misses); vector is the *worst* first-stage mode here.
+- **Adversarial → rerank wins** — semantic precision cuts through terminology lures.
+- **Naive `hybrid` (RRF) underperforms in every regime** — fusing the weaker leg at equal weight dilutes the stronger.
+- **`hybrid_rerank` wins or ties every regime** → the empirical case for shipping it. (Tuning it — rerank a *vector* candidate pool, with each chunk's section path fed to the reranker — lifted it to parity/best; the two levers are synergistic, neither alone.)
 
-End-to-end, **rerank beats hybrid on judged answer quality in every category** (overall 3.45 vs 3.14 / 5). The eval also caught a real bug (BM25 was OR-ing stopwords, dragging hybrid below vector) and a real limitation: routing was 100% accurate on normal questions but only **20% on adversarial lures** — a router weakness, not a retrieval one (retrieval is strong *given correct routing*). I then **hardened the router with context engineering** — sharper tool/scope descriptions encoding the real Oracle product boundaries — which took **adversarial routing from 20% → 100%**, with retrieval metrics unchanged (the scope edits only affect what the router reads, not `retrieve()`). Details and methodology in [TEST_LOG.md](TEST_LOG.md).
+End-to-end (LLM-judged), **`hybrid_rerank` is best on answer quality in every category** — overall **3.97** vs vector 3.79 / hybrid 3.66 (out of 5), groundedness ~4.0+.
+
+**Findings the eval surfaced — the honest part:**
+- **A small-sample trap, both directions.** An n=5 pilot *overstated* rerank's adversarial edge (an apparent "doubling") **and** *understated* BM25's exact-term edge — both corrected once each category grew to n=15. (That's why the set is balanced 15/15/15/15.)
+- **Real bugs caught by the eval, not by eyeballing:** BM25 was OR-ing stopwords (dragging hybrid below vector); the LLM judge scored a 200-char snippet, under-measuring groundedness on larger chunks (it now sees full text).
+- **Routing is 100% on single/cross/exact-term but *hedges* on some adversarial lures** — it queries the right product *plus* a finance-vocab-suggested extra. Context-engineering the scope boundaries (encoding real Oracle product lines) fixed several, but the residual is intermittent and **harmless** (right product + extra; answers stay correct, groundedness 4.3+). That's prompt routing's probabilistic ceiling — a hard guarantee would need a routing classifier, not more prompt wording.
+
+Full methodology, the per-run scorecards, and the reasoning behind each correction are in [TEST_LOG.md](TEST_LOG.md).
 
 ## What I'd do next
 
-- **Push routing robustness further.** Context-engineering the scope descriptions took adversarial routing 20% → 100% on the current lures; next is a larger, harder adversarial set and an explicit disambiguation/confidence step so the router degrades gracefully on lures it hasn't seen.
+- **A routing classifier for a hard guarantee.** Context-engineering the scope descriptions fixed the original lures and several new ones, but prompt routing has a *probabilistic ceiling* — it still occasionally *hedges* (queries the right product plus a finance-vocab-suggested extra) on the strongest lures. A small routing classifier or a post-route relevance gate would give a hard guarantee that prompt wording can't.
 - **Cut answer-synthesis latency.** Streaming already makes the demo *feel* fast (p50 ~30s is dominated by synthesis, not retrieval's ~300ms); next is capping answer length and parallelizing the two sequential calls a cross-product question makes.
 - **Oracle 23ai migration.** Consolidate Qdrant + SQLite into Oracle Database 23ai's native vector search — one store, one product family, the obvious enterprise fit.
 - **Tenant isolation.** Add a `tenant_id` dimension to chunks and filter every retrieval by it — the multi-tenancy primitive an Accenture deployment needs.
-- **Scale the federation** from 3 to N servers (the pattern is already a factory + a registry) and **grow the eval set** (adversarial/cross samples are small — n=5/20 here).
+- **Scale the federation** from 3 to N servers (the pattern is already a factory + a registry). The eval set is now a balanced 60 questions across 4 regimes; the next lift is human-labeled gold chunks and a larger adversarial set.
 - **Query decomposition** for multi-hop cross-product questions — break a compound question into sub-questions before retrieving.
 
 ## Tech stack
