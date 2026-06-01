@@ -47,7 +47,7 @@ Enterprise Oracle knowledge is fragmented across product lines — each with its
 
 - The **orchestrator** connects to all three MCP servers, namespaces their tools (`erp_search_docs`, `oci_search_docs`, …), and runs a Claude tool-use loop: Claude picks the product(s), the orchestrator forwards each call, and the loop ends with a cited answer. The answer **streams token-by-token** over SSE while every tool call is captured in a **trace** the UI renders — federation made visible — alongside a **per-question cost panel** (Claude spend + cache-hit %; Voyage retrieval cost excluded).
 - Each **MCP server** is product-scoped and identical in shape (one factory, `shared/mcp_server.py`); only its corpus, scope description, and port differ. Per-collection isolation means a server only ever returns its own product's chunks. EPM goes one level finer: its one collection holds three distinct module guides (Planning, Financial Consolidation & Close, Narrative Reporting), so it exposes **per-module search tools** (`epm_search_planning` / `_fcc` / `_narrative`, each scoped by source doc) — a Planning question structurally can't surface FCC chunks.
-- **Retrieval** (`shared/retrieval.py`) modes: `vector_only` (Qdrant, voyage-3-large), `hybrid` (vector + SQLite FTS5 BM25 fused with Reciprocal Rank Fusion), `hybrid_rerank` (the **production default** — candidates reranked with Voyage rerank-2; tuned to rerank a vector pool with each chunk's section path fed to the reranker), and `keyword_only` (pure BM25, an eval-only baseline for the component ablation). A relevance floor lets the agent abstain when nothing scores well rather than answer from off-topic chunks.
+- **Retrieval** (`shared/retrieval.py`) modes: `vector_only` (Qdrant, voyage-3-large), `hybrid` (vector + SQLite FTS5 BM25 fused with Reciprocal Rank Fusion), `hybrid_rerank` (the **production default** — candidates reranked with Voyage rerank-2 over a hybrid vector+BM25/RRF candidate pool, with each chunk's section path fed to the reranker), and `keyword_only` (pure BM25, an eval-only baseline for the component ablation). A relevance floor lets the agent abstain when nothing scores well rather than answer from off-topic chunks.
 - Only the **UI** is public (joined to both the internal network and Traefik's); everything else stays on an internal Docker network.
 
 ## Quick start
@@ -85,22 +85,22 @@ The eval is the part I'd most want to defend in the interview, so it's deliberat
 
 Dataset: **60 hand-built questions, balanced 15/15/15/15** — single-product, cross-product (ERP↔EPM), adversarial (terminology lures), and exact-term (member names / codes / acronyms — the BM25-favorable regime). The `retrieval_eval` adds a `keyword_only` (BM25) mode so the component ablation is *measured*, not inferred.
 
-**The honest headline: no single first-stage retriever wins everywhere — it's regime-dependent — and the tuned reranker is the only mode that wins or ties every regime.** Retrieval, by category (strict section bar; exact-term on the TEXT bar, since its tokens live in body text not headings — recall@1 / MRR):
+**The honest headline: no single retriever wins everywhere — it's regime-dependent, and no mode is strictly dominant.** vector owns semantic cross-product, **keyword owns exact-term** (the regime-A lexical case), and the reranker owns adversarial and ties single — so the reranker ships as the default because it is the most robust **all-rounder** (never the worst in any regime), *not* because it wins everywhere. Retrieval, by category (strict section bar; exact-term on the TEXT bar, since its tokens live in body text not headings; `hybrid_rerank` shown for the deployed `pool=hybrid` — recall@1 / MRR):
 
 | category (n)        | keyword_only  | vector_only     | hybrid        | hybrid_rerank   |
 |---------------------|---------------|-----------------|---------------|-----------------|
-| single (15)         | 60% / 0.673   | **67% / 0.744** | 60% / 0.706   | 67% / **0.747** |
-| cross (30)          | 30% / 0.416   | **43% / 0.569** | 27% / 0.475   | 40% / 0.515     |
-| adversarial (15)    | 33% / 0.436   | 40% / 0.539     | 33% / 0.506   | **53% / 0.617** |
-| exact_term (15)     | 93% / 0.956   | 87% / 0.906     | 93% / 0.942   | **100% / 1.000**|
+| single (15)         | 60% / 0.673   | 67% / 0.744     | 60% / 0.706   | **67% / 0.747** |
+| cross (30)          | 30% / 0.416   | **43% / 0.569** | 27% / 0.475   | 37% / 0.475     |
+| adversarial (15)    | 33% / 0.436   | 40% / 0.539     | 33% / 0.506   | **53% / 0.591** |
+| exact_term (15)     | **93% / 0.956** | 73% / 0.813   | 87% / 0.908   | 87% / 0.922     |
 
-- **Semantic (single/cross) → vector wins**, BM25 is weakest.
-- **Exact-term → BM25 *edges* vector** (it nails member names/codes the embedder paraphrase-misses); vector is the *worst* first-stage mode here.
+- **Semantic (single/cross) → vector wins**, BM25 weakest.
+- **Exact-term (regime A) → BM25 wins outright** (keyword 0.956 vs vector 0.813): on unique identifiers — `VM.Standard.E4.Flex`, `AP_INVOICE_LINES_ALL`, `OEP_Forecast` — the embedder grabs a *confusable sibling*; BM25 matches the exact token. Vector is the **worst** first-stage here, and even the reranker (0.922) trails keyword.
 - **Adversarial → rerank wins** — semantic precision cuts through terminology lures.
 - **Naive `hybrid` (RRF) underperforms in every regime** — fusing the weaker leg at equal weight dilutes the stronger.
-- **`hybrid_rerank` wins or ties every regime** → the empirical case for shipping it. (Tuning it — rerank a *vector* candidate pool, with each chunk's section path fed to the reranker — lifted it to parity/best; the two levers are synergistic, neither alone.)
+- **No mode is strictly dominant** — reranker wins single+adversarial, vector wins cross, keyword wins exact-term. The reranker ships as the default as the **robust all-rounder** (never worst in any regime), not because it wins everywhere. It draws candidates from a **hybrid** vector+BM25 pool by default; an A/B (TEST_LOG) shows a *vector*-only pool scores slightly higher on cross/exact-term — the hybrid pool is the deployed default despite the A/B favoring vector.
 
-End-to-end (LLM-judged), **`hybrid_rerank` is best on answer quality in every category** — overall **3.97** vs vector 3.79 / hybrid 3.66 (out of 5), groundedness ~4.0+.
+End-to-end (LLM-judged), `hybrid_rerank` led answer quality in every category — overall 3.97 vs vector 3.79 / hybrid 3.66 (out of 5), groundedness ~4.0+. *(These figures predate the 2026-06-01 exact_term reframe + `pool=hybrid` flip and are pending a judge re-run against the new questions.)*
 
 **Findings the eval surfaced — the honest part:**
 - **A small-sample trap, both directions.** An n=5 pilot *overstated* rerank's adversarial edge (an apparent "doubling") **and** *understated* BM25's exact-term edge — both corrected once each category grew to n=15. (That's why the set is balanced 15/15/15/15.)

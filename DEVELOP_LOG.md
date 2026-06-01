@@ -406,3 +406,13 @@ Turned the eval from "3 modes, 45 q (30/10/5)" into a balanced **4-mode × 4-cat
 - **`DEMO_SCRIPT.md` refreshed** (gitignored / local): self-correcting eval headline, the live "Tricky routing" beat, the honest routing-ceiling story, updated Q&A.
 
 **Current corpus (post-coverage-fix):** erp 947 / epm **1424** / oci 754 = **3125** chunks (both stores reconcile). EPM grew by the *Administering Planning* guide (the coverage fix).
+
+---
+
+## Exact_term reframe (real regime-A set) + candidate-pool re-A/B (2026-06-01)
+
+**Reframed `exact_term` into a true regime-A set.** The original 15 were mostly OOV/jargon (Smart View, Calc Manager, subledger, revaluation, shielded) a strong embedder handles fine — `hybrid_rerank` ceilinged at 1.000, so the category couldn't discriminate. Swapped the 5 weakest for **unique-identifier lookups with confusable siblings present in the corpus**: `OEP_Forecast` (vs OEP_Working/Plan), `VM.Standard.E4.Flex` (vs E3/E5/E6.Flex, co-listed in-chunk), and ERP table names `AP_INVOICE_LINES_ALL` / `RA_CUSTOMER_TRX_ALL` / `RA_INTERFACE_LINES_ALL` (header-vs-lines siblings). Set stays 15 (5 epm / 6 oci / 4 erp); all keywords verified in corpus.
+
+**Result — overturns the "wins every regime" headline.** On the harder set (TEXT bar, n=15): `vector_only` exact-term falls **0.906 → 0.813** (it grabs confusable siblings), `keyword_only` holds 0.956 and **wins exact-term outright**, `hybrid_rerank` falls **1.000 → 0.922** (can't catch BM25). Honest verdict now: **no mode is strictly dominant** — reranker wins single+adversarial, vector wins cross, keyword wins exact-term; the reranker is the **robust all-rounder** (never worst in any regime), which is the real case for the default. Supersedes the earlier "only mode that wins or ties every regime."
+
+**`RERANK_POOL` default flipped `vector` → `hybrid` and deployed.** Re-A/B'd the candidate pool on the harder set: `pool=hybrid` **loses or ties every category** (cross −0.040, adversarial −0.026, exact_term −0.011 vs `pool=vector`) — the exact chunk is already in the 30-deep vector pool (vector recall@10 = 100%), so adding BM25 only adds noise. A clean negative result reconfirming the 2026-05-31 tuning. **Shipped `pool=hybrid` anyway as a deliberate choice** (deployed to the 3 MCP servers via rebuild) — so the deployed default trails the A/B optimum; recorded honestly, not as a win. Scorecards `20260601T154138Z` (hybrid) / `154256Z` (vector). Deviation from plan: this reverses the committed `pool=vector` tuning default against the eval evidence — logged as an explicit, eyes-open decision. Answer-quality/judge figures predate this and are **pending a runner re-run**.

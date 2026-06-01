@@ -414,3 +414,40 @@ The end-to-end run (above) showed the router *hedging* on adversarial lures that
 - **`gl-intercompany` hedges** — expected; intentionally left (genuinely spans ERP+EPM).
 
 **The honest lesson:** prompt-based routing has a **probabilistic ceiling** — hardening shifts the odds (fixed one lure, reduced the others) but can't make a soft prompt deterministic, and over-fitting the wording to chase the metric is what the eval exists to prevent. Crucially the residual is **"right product + a wasteful extra," never wrong-routing**, so it's harmless: this run scored **quality 4.04–4.18, groundedness 4.27–4.40, recall 93–100%** on adversarial — the answers are correct; the strict set-match metric just penalizes the extra call. A *hard* guarantee would need a structural fix (a routing classifier or a post-route relevance check before answering) — logged as future work, out of scope for the demo.
+
+### Exact_term reframed to a real regime-A set + the candidate-pool re-A/B (2026-06-01)
+
+Two changes this session, and a headline correction.
+
+**1. Reframed `exact_term` into a true regime-A set.** The original 15 were mostly OOV/jargon (Smart View, Calculation Manager, subledger, revaluation, shielded) that a strong embedder handles fine — so `hybrid_rerank` ceilinged at 1.000 and the category couldn't discriminate the modes. Replaced the 5 weakest with **unique-identifier lookups whose confusable siblings are present in the corpus** — the regime where keyword genuinely beats dense:
+- `OEP_Forecast` (EPM Planning member; lures: the common siblings `OEP_Working`/`OEP_Plan`)
+- `VM.Standard.E4.Flex` (OCI shape; siblings `E3`/`E5`/`E6.Flex` are co-listed in the same chunk — the HEX-994-X2/X3 case)
+- `AP_INVOICE_LINES_ALL`, `RA_CUSTOMER_TRX_ALL`, `RA_INTERFACE_LINES_ALL` (ERP table names; header-vs-lines confusable siblings)
+
+Set stays 15 (5 EPM / 6 OCI / 4 ERP); all keywords verified present in the target corpus.
+
+**Effect — the harder set exposes vector's regime-A weakness** (TEXT bar, n=15; scorecard `20260601T154256Z`, `pool=vector`):
+
+| mode | recall@1 | MRR | vs old easy set |
+|---|---|---|---|
+| keyword_only | 93% | **0.956** | unchanged (BM25 nails exact tokens) |
+| hybrid | 87% | 0.908 | 0.942 → 0.908 |
+| hybrid_rerank | 87% | 0.933 | **1.000 → 0.933** |
+| vector_only | 73% | **0.813** | **0.906 → 0.813** |
+
+`vector_only` falls to 0.813 — it grabs confusable siblings — while `keyword_only` holds 0.956 and now **wins exact-term outright**. This *supersedes* the earlier "BM25 only edges vector (0.956 vs 0.906)": on a real regime-A set the gap is decisive (0.956 vs 0.813), and even the reranker (0.933) can't catch BM25.
+
+**Headline correction:** "the reranker is the only mode that wins or ties every regime" is now **false** — on the regime-A set keyword wins exact-term and the reranker is second. Honest verdict: **no mode is strictly dominant** (reranker wins single+adversarial, vector wins cross, keyword wins exact-term); the reranker ships as the default because it is the **robust all-rounder** — never the worst in any regime — not because it wins everywhere. The old "wins everywhere" was an artifact of an exact-term set too easy to separate the modes.
+
+**2. Candidate-pool re-A/B (`RERANK_POOL` vector vs hybrid).** Hypothesis: now that vector fails on regime A, feeding the reranker a hybrid (vector+BM25/RRF) candidate pool should recover the exact-token chunks. **Tested on the new harder set — it does not.** `hybrid_rerank`, new dataset:
+
+| category | pool=vector (`154256Z`) | pool=hybrid (`154138Z`) | Δ |
+|---|---|---|---|
+| single | 0.747 | 0.747 | 0 |
+| cross | 0.515 | 0.475 | −0.040 |
+| adversarial | 0.617 | 0.591 | −0.026 |
+| exact_term | 0.933 | 0.922 | −0.011 |
+
+The hybrid pool **loses or ties every category — even exact_term**. Mechanism: `vector_only` recall@10 on exact_term is 100% — the right exact-token chunk is *already in* the 30-deep vector candidate pool, just mis-ranked; the reranker recovers it from the clean vector pool, and adding BM25 only injects noise. A clean negative result, reconfirming the 2026-05-31 tuning (vector pool + section path) even under the harder test.
+
+**Decision (deliberate, against the A/B): shipped `pool=hybrid` as the default** anyway (`shared/retrieval.py`, deployed to the 3 MCP servers via rebuild). The deployed default therefore trails the A/B optimum on cross (0.475 vs 0.515) and exact_term (0.922 vs 0.933) and beats it on nothing — recorded here in full rather than presented as a win. The answer-quality (LLM-judge) figures above predate this change and are **pending a runner re-run** against the new questions.
