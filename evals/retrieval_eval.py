@@ -147,8 +147,11 @@ def main() -> None:
         cat_rows = [r for r in rows if r["category"] == cat]
         bar = _CATEGORY_BAR.get(cat, "section")
         label = "TEXT bar" if bar == "text" else "section bar"
-        nq = len(cat_rows) // len(MODES)
-        return f"### {cat} ({nq} questions, {label})\n\n{summarize(cat_rows, bar)}\n\n"
+        # One eval per (question, product); cross questions span 2 products, so this
+        # count exceeds the distinct-question count for that category. Hence the word
+        # "evaluations" rather than "questions" — it matches the recall/MRR denominator.
+        n_eval = len(cat_rows) // len(MODES)
+        return f"### {cat} ({n_eval} evaluations, {label})\n\n{summarize(cat_rows, bar)}\n\n"
 
     per_category = "".join(
         _cat_block(cat) for cat in CATEGORIES if any(r["category"] == cat for r in rows)
