@@ -2,7 +2,7 @@
 
 A record of what was verified at each phase and the measured results — evidence the
 system works end to end, and the honest findings from the evaluation. Written for
-interview reference; numbers are from live runs on the VPS unless noted.
+project reference; numbers are from live runs on the VPS unless noted.
 
 ---
 
@@ -97,7 +97,7 @@ The orchestrator now accumulates Claude token usage across every step of the too
 
 - **Honest scope:** Claude spend only — the Voyage embed/rerank cost (inside the MCP servers' `retrieve()`) is **not** counted, and is labelled as such everywhere. Claude dominates per-question cost, so this is the defensible headline, not a full bill.
 - **Sanity figures (arithmetic):** single-product ~$0.01–0.017, cross-product ~$0.03. The "input served from cache" metric reads ~0% on a cold first query and ~90%+ once the system+tools prefix is cached — a live, visible demonstration of the prompt-caching work.
-- **Interview talking point:** "I instrumented per-question cost — token breakdown and dollar figure in the trace. The cache-hit metric makes the prompt-caching savings visible: the first question pays to write the cache, every one after reads it for ~10% of the price."
+- **Talking point:** "I instrumented per-question cost — token breakdown and dollar figure in the trace. The cache-hit metric makes the prompt-caching savings visible: the first question pays to write the cache, every one after reads it for ~10% of the price."
 - **Verified (VPS, browser):** the cost panel renders live below the trace on the demo, with the per-token caption and the "input served from cache" metric. Arithmetic verified separately.
 
 ---
@@ -209,7 +209,7 @@ End-to-end p50 ~28–33s, p95 76–157s — the demo's real weakness, dominated 
 2. **Hybrid bug** → found and fixed: the BM25 leg OR-ed *every* token including stopwords (`how/do/a/in`), matching nearly every chunk and polluting RRF; now ORs content words only. Improved hybrid retrieval, but vector still leads on this corpus.
 3. **Rerank candidate pool** → already 30.
 
-### Interview talking points
+### Talking points
 
 - **Lead with the per-category result, not the aggregate — and with the sample-size correction.** "On *adversarial* questions, an n=5 pilot showed reranking *doubling* top-1 precision (40%→80%) — but I distrusted n=5, expanded adversarial to 15, and the gap regressed to a *modest* edge (53% vs 40%). On *cross-product*, vector actually beats rerank. On *easy* questions, vector already saturates. So the honest takeaway is that pure vector is the strongest mode on this corpus and rerank's wins are smaller than the pilot suggested — which I'd never have caught without rebalancing the dataset." (This *is* the strong story: a self-corrected finding beats an impressive-but-fragile one.)
 - **The routing-robustness finding *and the fix*.** "I measured routing accuracy: 100% on normal single- and cross-product questions, but 20% on adversarial terminology lures — the agent follows the misleading word to the wrong product. The retrieval is fine *given correct routing*, so the fix was in the router, not the retrieval: I sharpened the tool/scope descriptions to encode the real Oracle product boundaries — that took adversarial routing from 20% to 100%, with retrieval metrics unchanged (the scope edits only affect what the router reads, not `retrieve()`)." This is the strongest single story — **measured a failure mode, diagnosed it precisely, fixed it with context engineering, re-measured, and the fix was provably isolated to the layer it should touch.** And the honesty note: I encoded durable product-boundary facts, not question→answer mappings, so it generalizes rather than overfits the 5 eval questions.
@@ -245,7 +245,7 @@ The `epm` knowledge base **conflates three EPM modules in one collection**, so a
 
 **On the limits of automated verification:** a fact-check agent labeled the FCC-sourced answer "well-cited-but-wrong" because the FCC guide marks those scenario properties "not used in Financial Consolidation and Close." That verdict **over-read the disclaimer** — Start/End Yr and Exchange Rate Table are almost certainly genuine *Planning* scenario properties (the FCC note means "FCC ignores these," implying they apply elsewhere). At this depth both the system's answers *and* our automated checks carry Oracle domain uncertainty; reliable adjudication needs an SME. We stopped tuning here.
 
-### Interview talking points (this arc)
+### Talking points (this arc)
 
 - **A fix that "passes" its target metric can still move others — measure the blast radius.** The chunking fix nailed chunk size and held TEXT-bar recall (98%), but I checked the strict SECTION bar too and found a real regression, then *proved* it wasn't tunable (4 labeling rules + a heading-detection revert) rather than guessing.
 - **Distinguish a real regression from an eval artifact.** The judge's groundedness "drop" was mostly a 200-char trace-snippet truncation interacting with bigger chunks — the answering model had full context. Knowing *what the judge actually sees* mattered more than the number.
@@ -313,7 +313,7 @@ The refreshed scorecard put `vector_only` ahead of `hybrid_rerank` on the strict
 
 **Result:** tuned `hybrid_rerank` now **wins adversarial** (0.617 vs vector 0.539), **ties single** (0.747), **halves the cross gap** (0.449→0.515 vs 0.569), and is **~level overall** (0.598 vs 0.605). TEXT bar unchanged (~0.975), so no recall cost. Both levers are the default (`a528e14`, env-overridable) and deployed to the live demo. Scorecard `20260531T153941Z`.
 
-**Interview point:** I didn't accept "vector wins, rerank underperforms" — I formed two hypotheses, made them env-toggleable, A/B'd them for free on the retrieval eval, and *isolated* them. The pretty hypothesis (RRF noise) was wrong; the real win was a non-obvious synergy between a clean pool and structural context. Reranker now ~parity overall and best-in-class on the hard adversarial queries.
+**Key point:** I didn't accept "vector wins, rerank underperforms" — I formed two hypotheses, made them env-toggleable, A/B'd them for free on the retrieval eval, and *isolated* them. The pretty hypothesis (RRF noise) was wrong; the real win was a non-obvious synergy between a clean pool and structural context. Reranker now ~parity overall and best-in-class on the hard adversarial queries.
 
 ### Component ablation — adding the keyword_only (BM25) baseline (2026-05-31)
 
@@ -349,7 +349,7 @@ The query set was semantic-biased, so the ablation under-tested the lexical regi
 
 **A clean negative result.** BM25's textbook advantage on exact terms **did not appear** — `keyword_only` exactly *ties* `vector_only` (both 0.867). voyage-3-large embeds even rare exact tokens well enough to keep pace, so the lexical leg adds no edge on this corpus. `hybrid` (RRF) is *slightly worse* even here (0.825) — fusion dilution in every regime. The tuned `hybrid_rerank` wins the slice outright (1.000): the complementarity surfaces through *reranking the candidate pool*, not RRF fusion.
 
-**Cross-regime conclusion:** `vector_only` ≈ tuned `hybrid_rerank` are strongest across semantic, adversarial, *and* exact-term queries; naive `hybrid` underperforms everywhere; `keyword_only` is weakest except on exact-term, where it only ties. **Interview point:** I hypothesised exact-term queries would expose a BM25 edge and justify hybrid; I tested it and got a null — a strong modern embedder erases the classic lexical advantage on this corpus. Honest negative results are part of a credible eval. (n=5 — directional.)
+**Cross-regime conclusion:** `vector_only` ≈ tuned `hybrid_rerank` are strongest across semantic, adversarial, *and* exact-term queries; naive `hybrid` underperforms everywhere; `keyword_only` is weakest except on exact-term, where it only ties. **Key point:** I hypothesised exact-term queries would expose a BM25 edge and justify hybrid; I tested it and got a null — a strong modern embedder erases the classic lexical advantage on this corpus. Honest negative results are part of a credible eval. (n=5 — directional.)
 
 ### Exact-term, n=15 — BM25's edge appears, and the all-regime verdict (2026-05-31)
 
@@ -364,7 +364,7 @@ Promoted `exact_term` to a full category (15 questions; dataset now 60 = 15/15/1
 
 **`keyword_only` (0.956) now beats `vector_only` (0.906) on exact-term**, as does `hybrid` (0.942) — vector is the *worst* first-stage mode here, missing exact tokens BM25 nails. The n=5 tie was small-sample noise; the lexical-complementarity signal is real on a credible sample. **Supersedes the "clean null" recorded just above.**
 
-**Methodological symmetry (the interview point):** n=5 *overstated* rerank on adversarial (doubling → modest) **and** *understated* keyword on exact-term (tie → win). Both directions show n=5 is unreliable — which is exactly why the 15-per-category rebalance mattered.
+**Methodological symmetry (the key point):** n=5 *overstated* rerank on adversarial (doubling → modest) **and** *understated* keyword on exact-term (tie → win). Both directions show n=5 is unreliable — which is exactly why the 15-per-category rebalance mattered.
 
 **All-regime verdict — no single first-stage mode dominates:**
 
@@ -499,7 +499,7 @@ The fusion work above showed hybrid can match/beat vector on *ranking*, but the 
 
 **Honest caveats:** (a) adding even light context can rescue vector on rare tokens — bare `XCC` missed, but "XCC flexfield code" was found at rank 1; the collapse is specific to *context-poor* exact lookups. (b) This regime is *scarce* on this clean corpus (~3 clean misses per ~16 ultra-rare tokens probed); voyage-3-large embeds most rare tokens fine. On a noisier / multi-domain corpus the OOV rate — and hybrid's margin — would be far larger.
 
-**Cross-experiment synthesis (the interview through-line):** hybrid's value is regime-specific, and the *fusion mechanism* decides whether it's captured. (1) clean/semantic — vector ≈ rerank, RRF dilutes; (2) exact-token *ranking* — score-based/adaptive fusion or rerank fixes it; (3) OOV *recall* — only the sparse leg has recall, and reranking the union recovers it fully (vector 0.275 → rerank 1.000). Production `hybrid_rerank` (sparse+dense pool → cross-encoder rerank) is the one architecture that wins all three — the empirical case for it, and for hybrid retrieval generally on data messier than this corpus.
+**Cross-experiment synthesis (the through-line):** hybrid's value is regime-specific, and the *fusion mechanism* decides whether it's captured. (1) clean/semantic — vector ≈ rerank, RRF dilutes; (2) exact-token *ranking* — score-based/adaptive fusion or rerank fixes it; (3) OOV *recall* — only the sparse leg has recall, and reranking the union recovers it fully (vector 0.275 → rerank 1.000). Production `hybrid_rerank` (sparse+dense pool → cross-encoder rerank) is the one architecture that wins all three — the empirical case for it, and for hybrid retrieval generally on data messier than this corpus.
 
 ### IDF-based adaptive router — fixing the acronym blind spot, and a confound (2026-06-01)
 

@@ -15,14 +15,14 @@ ingestion + eval tooling. Each container bakes in a copy of `shared/`.
 | File | What it is |
 |------|------------|
 | `CLAUDE.md` | Standing rules for working in this repo (phase discipline, locked tech stack, environment notes). Read by Claude Code on every session. |
-| `PROJECT_CONTEXT.md` | The why: interview-demo framing, the role, what the project is meant to prove. |
+| `PROJECT_CONTEXT.md` | The why: project framing, goals, and what it's meant to prove (local only — gitignored). |
 | `MASTER_PLAN.md` | The build sequence — phases, numbered steps, and each phase's "definition of done." The source of truth for build order. |
 | `ARCHITECTURE.md` | Runtime topology: containers, networks, data flow, the per-collection isolation boundary. |
 | `DEVELOP_LOG.md` | Running log of what's been built, deferred, or deviated from — updated at the end of each phase. |
 | `README.md` | Public-facing overview and quickstart. |
 | `ACRONYM.md` | Oracle domain glossary (ERP/EPM/OCI terms) used to ground the corpus and eval questions. |
 | `DEMO_SCRIPT.md` | Walk-through for demoing the live system. |
-| `STORY.md` | Interview prep / narrative notes (local only — gitignored). |
+| `STORY.md` | Narrative / talking-point notes (local only — gitignored). |
 | `TEST_LOG.md` | Manual verification log — commands run and outcomes observed. |
 | `docker-compose.yml` | The whole stack: qdrant, three MCP servers, orchestrator, UI, plus Traefik labels for ingress. |
 | `.env` / `.env.example` | API keys (Anthropic, Voyage) and config. `.env` is gitignored; `.env.example` holds placeholders. |

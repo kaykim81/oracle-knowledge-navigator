@@ -181,7 +181,7 @@ Surfaced as the eval grew **exact-term** and **OOV** slices — specific tokens 
 | **beautifulsoup4 / lxml** | Libraries for parsing/crawling HTML (the OCI pages). |
 | **httpx** | An async HTTP client (fetching docs, calling APIs). |
 | **pydantic** | A data-validation/modeling library (`Chunk`, `Document`, `SearchResult`). |
-| **gitignored** | Listed in `.gitignore` so the file is never committed (keeps secrets/interview docs out of the public repo). |
+| **gitignored** | Listed in `.gitignore` so the file is never committed (keeps secrets and local-only docs out of the public repo). |
 
 ---
 

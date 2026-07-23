@@ -2,7 +2,7 @@
 
 A federated, agentic RAG system over three Oracle product knowledge bases — **ERP** (financials and operations), **OCI** (cloud infrastructure), and **EPM** (planning and analysis) — exposed as independent [MCP](https://modelcontextprotocol.io) servers behind one orchestrating agent. Ask a question in plain English; the agent routes it to the right knowledge base(s), retrieves with a hybrid pipeline (vector + BM25 + rerank), and answers with citations. A single question can span products.
 
-> Built as an interview demo for an **Applied AI Engineer** role on Accenture's **Oracle Business Group AI Center of Excellence**. It's a scaled-down, end-to-end proof of the pattern that practice runs at scale — many product-scoped knowledge servers, one agent federating across them, with retrieval quality measured and the whole thing deployed behind a real URL.
+> Built as a personal project to explore federated, agentic RAG end to end. It's a scaled-down, end-to-end proof of the pattern that practice runs at scale — many product-scoped knowledge servers, one agent federating across them, with retrieval quality measured and the whole thing deployed behind a real URL.
 
 **Live demo:** https://navigator.p36server.com (basic-auth protected — credentials shared by email, not here).
 
@@ -78,7 +78,7 @@ Most modules also have a CLI smoke test (e.g. `python -m shared.retrieval --help
 
 ## Evaluation
 
-The eval is the part I'd most want to defend in the interview, so it's deliberately rigorous and honest. Full methodology and findings: [TEST_LOG.md](TEST_LOG.md). Two standard levels, plus targeted regime probes:
+The eval is the part of this project I care most about getting right, so it's deliberately rigorous and honest. Full methodology and findings: [TEST_LOG.md](TEST_LOG.md). Two standard levels, plus targeted regime probes:
 
 1. **Retrieval-level** (`evals/retrieval_eval.py`) — compares the retrieval modes directly on `retrieve()`, no agent, no judge. Reports recall@k and MRR under two relevance bars (keyword anywhere = lenient; keyword in the *section path* = strict). Near-free, isolates exactly what the modes change.
 2. **End-to-end** (`evals/runner.py`) — queries the orchestrator once per mode and scores answers with an LLM-as-judge (Sonnet 4.6 over the Batches API) on correctness / groundedness / citation, plus routing accuracy and latency.
@@ -116,7 +116,7 @@ Full methodology, the per-run scorecards, and the reasoning behind each correcti
 - **A routing classifier for a hard guarantee.** Context-engineering the scope descriptions fixed the original lures and several new ones, but prompt routing has a *probabilistic ceiling* — it still occasionally *hedges* (queries the right product plus a finance-vocab-suggested extra) on the strongest lures. A small routing classifier or a post-route relevance gate would give a hard guarantee that prompt wording can't.
 - **Cut answer-synthesis latency.** Streaming already makes the demo *feel* fast (p50 ~30s is dominated by synthesis, not retrieval's ~300ms); next is capping answer length and parallelizing the two sequential calls a cross-product question makes.
 - **Oracle 23ai migration.** Consolidate Qdrant + SQLite into Oracle Database 23ai's native vector search — one store, one product family, the obvious enterprise fit.
-- **Tenant isolation.** Add a `tenant_id` dimension to chunks and filter every retrieval by it — the multi-tenancy primitive an Accenture deployment needs.
+- **Tenant isolation.** Add a `tenant_id` dimension to chunks and filter every retrieval by it — the multi-tenancy primitive a real enterprise deployment needs.
 - **Scale the federation** from 3 to N servers (the pattern is already a factory + a registry). The eval set is now a balanced 60 questions across 4 regimes; the next lift is human-labeled gold chunks and a larger adversarial set.
 - **Query decomposition** for multi-hop cross-product questions — break a compound question into sub-questions before retrieving.
 

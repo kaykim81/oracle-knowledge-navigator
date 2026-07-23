@@ -51,4 +51,4 @@ Before any run that costs real money (the full LLM-judge run is ~$30 and ~90 min
 
 ---
 
-*Context: built as an interview demonstration for an Applied AI Engineer role on Accenture's Oracle Business Group AI Center of Excellence — a scaled-down but faithful, end-to-end build of the federation + RAG pattern, with retrieval quality measured rather than asserted. The reasoning behind every correction above is documented run-by-run in `TEST_LOG.md` and `DEVELOP_LOG.md`.*
+*Context: built as a personal project — a scaled-down but faithful, end-to-end build of the federation + RAG pattern, with retrieval quality measured rather than asserted. The reasoning behind every correction above is documented run-by-run in `TEST_LOG.md` and `DEVELOP_LOG.md`.*
